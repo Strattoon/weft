@@ -848,3 +848,253 @@ loop_b = Loop(items: List[String]) -> (results: List[String | Null]) {
     });
     assert_eq!(diags, sorted, "validate_with_mode must return diagnostics in deterministic order");
 }
+
+// ─── StateMachine validation (P6c) ────────────────────────────────────────────
+//
+// These tests build `StateMachineDef` structs directly (not via the parse
+// layer) so the checks are exercisable in pure unit-test isolation. One
+// violating SM per check asserts exactly one diagnostic of that code; a clean
+// SM asserts zero diagnostics (so the checks are not trigger-happy).
+
+use weft_compiler::validate::validate_state_machines;
+use weft_core::state_machine::{SmOwner, SmTransition, StateMachineDef};
+
+/// Helper: collect the diagnostic codes from a validate_state_machines call.
+fn sm_codes(sms: &[StateMachineDef]) -> Vec<String> {
+    let mut d = Vec::new();
+    validate_state_machines(sms, &mut d);
+    d.iter().filter_map(|x| x.code.clone()).collect()
+}
+
+/// A fully-clean SM that should produce zero diagnostics. Used as a regression
+/// guard against trigger-happy checks.
+fn clean_sm() -> StateMachineDef {
+    StateMachineDef {
+        name: "Clean".into(),
+        initial: "Open".into(),
+        terminal: vec!["Closed".into()],
+        authority: vec![],
+        max_iters: 10,
+        transitions: vec![
+            SmTransition {
+                from: "Open".into(),
+                event: "Close".into(),
+                to: "Closed".into(),
+                owner: SmOwner::Script,
+                guard: Some("always".into()),
+                artifact: None,
+            },
+        ],
+    }
+}
+
+#[test]
+fn clean_sm_produces_zero_diagnostics() {
+    let sm = clean_sm();
+    let codes = sm_codes(&[sm]);
+    assert!(
+        codes.is_empty(),
+        "a clean SM must produce zero diagnostics; got {:?}",
+        codes
+    );
+}
+
+// ── sm-unreachable-state ──────────────────────────────────────────────────────
+
+#[test]
+fn sm_unreachable_state_fires_on_orphaned_state() {
+    // "Orphan" is only reachable from nowhere: it's in a transition's `from`
+    // but no transition's `to`, and it's not `initial`. It IS in the state set
+    // (union of initial + every from + every to + terminal + authority) but has
+    // no in-edge, so it's unreachable.
+    let sm = StateMachineDef {
+        name: "UnreachableTest".into(),
+        initial: "Open".into(),
+        terminal: vec!["Closed".into()],
+        authority: vec![],
+        max_iters: 10,
+        transitions: vec![
+            SmTransition {
+                from: "Open".into(),
+                event: "Close".into(),
+                to: "Closed".into(),
+                owner: SmOwner::Script,
+                guard: Some("always".into()),
+                artifact: None,
+            },
+            // "Orphan" appears in `from` but nothing points to it (not initial,
+            // not a `to` of any row).
+            SmTransition {
+                from: "Orphan".into(),
+                event: "Exit".into(),
+                to: "Closed".into(),
+                owner: SmOwner::Script,
+                guard: Some("always".into()),
+                artifact: None,
+            },
+        ],
+    };
+    let c = sm_codes(&[sm]);
+    assert_eq!(
+        c.iter().filter(|s| s.as_str() == "sm-unreachable-state").count(),
+        1,
+        "expected exactly one sm-unreachable-state; got {:?}",
+        c
+    );
+}
+
+// ── sm-no-terminal ────────────────────────────────────────────────────────────
+
+#[test]
+fn sm_no_terminal_fires_on_dead_end_non_terminal() {
+    // "Stuck" is not in `terminal` and has no outgoing transition — a dead end.
+    let sm = StateMachineDef {
+        name: "NoTerminalTest".into(),
+        initial: "Open".into(),
+        terminal: vec!["Done".into()],
+        authority: vec![],
+        max_iters: 10,
+        transitions: vec![
+            SmTransition {
+                from: "Open".into(),
+                event: "Proceed".into(),
+                to: "Stuck".into(),
+                owner: SmOwner::Script,
+                guard: Some("always".into()),
+                artifact: None,
+            },
+            SmTransition {
+                from: "Open".into(),
+                event: "Skip".into(),
+                to: "Done".into(),
+                owner: SmOwner::Script,
+                guard: Some("always".into()),
+                artifact: None,
+            },
+            // "Stuck" appears as a `to` (so it's reachable) but has no `from`
+            // and is not in `terminal`.
+        ],
+    };
+    let c = sm_codes(&[sm]);
+    assert_eq!(
+        c.iter().filter(|s| s.as_str() == "sm-no-terminal").count(),
+        1,
+        "expected exactly one sm-no-terminal; got {:?}",
+        c
+    );
+}
+
+// ── sm-nondeterministic ───────────────────────────────────────────────────────
+
+#[test]
+fn sm_nondeterministic_fires_on_duplicate_from_event_pair() {
+    // Two transitions sharing the same (from, event) — nondeterministic.
+    let sm = StateMachineDef {
+        name: "NondetTest".into(),
+        initial: "Open".into(),
+        terminal: vec!["ClosedA".into(), "ClosedB".into()],
+        authority: vec![],
+        max_iters: 10,
+        transitions: vec![
+            SmTransition {
+                from: "Open".into(),
+                event: "Close".into(),
+                to: "ClosedA".into(),
+                owner: SmOwner::Script,
+                guard: Some("always".into()),
+                artifact: None,
+            },
+            SmTransition {
+                from: "Open".into(),
+                event: "Close".into(),  // same (from, event) as above
+                to: "ClosedB".into(),
+                owner: SmOwner::Script,
+                guard: Some("always".into()),
+                artifact: None,
+            },
+        ],
+    };
+    let c = sm_codes(&[sm]);
+    assert_eq!(
+        c.iter().filter(|s| s.as_str() == "sm-nondeterministic").count(),
+        1,
+        "expected exactly one sm-nondeterministic; got {:?}",
+        c
+    );
+}
+
+// ── sm-authority-inversion ────────────────────────────────────────────────────
+
+#[test]
+fn sm_authority_inversion_fires_on_model_into_authority_state() {
+    // A `Model`-owned transition whose `to` is in `sm.authority` is an inversion.
+    let sm = StateMachineDef {
+        name: "AuthInvTest".into(),
+        initial: "Open".into(),
+        terminal: vec!["Done".into()],
+        // "Protected" is declared as an authority state.
+        authority: vec!["Protected".into()],
+        max_iters: 10,
+        transitions: vec![
+            SmTransition {
+                from: "Open".into(),
+                event: "Propose".into(),
+                to: "Protected".into(),
+                owner: SmOwner::Model,  // Model → authority state = inversion
+                guard: Some("always".into()),
+                artifact: None,
+            },
+            SmTransition {
+                from: "Protected".into(),
+                event: "Approve".into(),
+                to: "Done".into(),
+                owner: SmOwner::Human,
+                guard: Some("always".into()),
+                artifact: None,
+            },
+        ],
+    };
+    let c = sm_codes(&[sm]);
+    assert_eq!(
+        c.iter().filter(|s| s.as_str() == "sm-authority-inversion").count(),
+        1,
+        "expected exactly one sm-authority-inversion; got {:?}",
+        c
+    );
+}
+
+#[test]
+fn sm_authority_inversion_does_not_fire_for_non_model_into_authority() {
+    // Script/Human/Gateway disposing into an authority state is fine — no inversion.
+    let sm = StateMachineDef {
+        name: "AuthOkTest".into(),
+        initial: "Open".into(),
+        terminal: vec!["Done".into()],
+        authority: vec!["Protected".into()],
+        max_iters: 10,
+        transitions: vec![
+            SmTransition {
+                from: "Open".into(),
+                event: "Approve".into(),
+                to: "Protected".into(),
+                owner: SmOwner::Human,  // Human → authority state is ALLOWED
+                guard: Some("always".into()),
+                artifact: None,
+            },
+            SmTransition {
+                from: "Protected".into(),
+                event: "Finish".into(),
+                to: "Done".into(),
+                owner: SmOwner::Script,
+                guard: Some("always".into()),
+                artifact: None,
+            },
+        ],
+    };
+    let c = sm_codes(&[sm]);
+    assert!(
+        !c.iter().any(|s| s.as_str() == "sm-authority-inversion"),
+        "Human-owned transition into authority state must NOT fire sm-authority-inversion; got {:?}",
+        c
+    );
+}

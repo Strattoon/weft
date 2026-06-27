@@ -1360,3 +1360,149 @@ mod tagged_flow_tests {
     }
 }
 
+// ─── StateMachine validation (P6c) ───────────────────────────────────────────
+
+use weft_core::state_machine::{SmOwner, StateMachineDef};
+
+/// Run all SM checks over every `StateMachineDef` in `sms`, appending
+/// diagnostics to `d`. Called from `compile_with_state_machines` after
+/// extraction so SM diagnostics surface on the compile output.
+pub fn validate_state_machines(sms: &[StateMachineDef], d: &mut Vec<Diagnostic>) {
+    for sm in sms {
+        check_state_machine(sm, d);
+    }
+    // Stable-sort the newly-appended SM diagnostics so the output is deterministic
+    // regardless of iteration order. Mirror the sort key used in `validate_with_mode`.
+    d.sort_by(|a, b| {
+        (a.line, a.column, a.end_line, a.end_column, a.code.as_deref(), a.message.as_str())
+            .cmp(&(b.line, b.column, b.end_line, b.end_column, b.code.as_deref(), b.message.as_str()))
+    });
+}
+
+/// Run all four SM checks for a single `StateMachineDef`.
+///
+/// SM rows have no source span (they are pre-lowering AST, not yet in the
+/// project graph), so all diagnostics use `Span::default()` — the file's
+/// convention for spanless diagnostics (e.g. `enrich` errors in `lib.rs`).
+fn check_state_machine(sm: &StateMachineDef, d: &mut Vec<Diagnostic>) {
+    use std::collections::{HashMap, HashSet};
+
+    // ── Derive the full state set ─────────────────────────────────────────────
+    // Union of: initial, every transition's `from` and `to`, every terminal,
+    // every authority state. This is the complete set of states the SM mentions.
+    let mut all_states: HashSet<&str> = HashSet::new();
+    all_states.insert(&sm.initial);
+    for t in &sm.transitions {
+        all_states.insert(&t.from);
+        all_states.insert(&t.to);
+    }
+    for s in &sm.terminal {
+        all_states.insert(s.as_str());
+    }
+    for s in &sm.authority {
+        all_states.insert(s.as_str());
+    }
+
+    // ── Derive the reachable-target set (states that appear as `to`) ─────────
+    let reachable_as_to: HashSet<&str> = sm.transitions.iter().map(|t| t.to.as_str()).collect();
+
+    // ── Check 1: sm-unreachable-state ─────────────────────────────────────────
+    // A state is unreachable if it is NOT `initial` AND is NOT the `to` of any
+    // transition. Collect violating states and sort them for a deterministic
+    // diagnostic order.
+    {
+        let mut unreachable: Vec<&str> = all_states
+            .iter()
+            .copied()
+            .filter(|&s| s != sm.initial.as_str() && !reachable_as_to.contains(s))
+            .collect();
+        unreachable.sort();
+        for state in unreachable {
+            push(
+                d,
+                Span::default(),
+                Severity::Error,
+                "sm-unreachable-state",
+                format!(
+                    "state '{}' in SM '{}' is unreachable: it is not initial and no transition leads to it",
+                    state, sm.name
+                ),
+            );
+        }
+    }
+
+    // ── Check 2: sm-no-terminal ───────────────────────────────────────────────
+    // A non-terminal state with no outgoing transition is a dead end.
+    {
+        let terminal_set: HashSet<&str> = sm.terminal.iter().map(|s| s.as_str()).collect();
+        let has_outgoing: HashSet<&str> = sm.transitions.iter().map(|t| t.from.as_str()).collect();
+
+        let mut dead_ends: Vec<&str> = all_states
+            .iter()
+            .copied()
+            .filter(|&s| !terminal_set.contains(s) && !has_outgoing.contains(s))
+            .collect();
+        dead_ends.sort();
+        for state in dead_ends {
+            push(
+                d,
+                Span::default(),
+                Severity::Error,
+                "sm-no-terminal",
+                format!(
+                    "state '{}' in SM '{}' has no outgoing transition and is not declared terminal",
+                    state, sm.name
+                ),
+            );
+        }
+    }
+
+    // ── Check 3: sm-nondeterministic ─────────────────────────────────────────
+    // Two transitions with the same (from, event) pair.
+    {
+        let mut seen: HashMap<(&str, &str), usize> = HashMap::new();
+        // Track which pairs we've already emitted a diagnostic for (avoid dups).
+        let mut flagged: HashSet<(&str, &str)> = HashSet::new();
+        for t in &sm.transitions {
+            let key = (t.from.as_str(), t.event.as_str());
+            match seen.get(&key) {
+                None => { seen.insert(key, 1); }
+                Some(_) => {
+                    if flagged.insert(key) {
+                        push(
+                            d,
+                            Span::default(),
+                            Severity::Error,
+                            "sm-nondeterministic",
+                            format!(
+                                "SM '{}': two or more transitions share (from='{}', event='{}') — nondeterministic",
+                                sm.name, t.from, t.event
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Check 4: sm-authority-inversion ──────────────────────────────────────
+    // A Model-owned transition whose `to` is an authority state.
+    {
+        let authority_set: HashSet<&str> = sm.authority.iter().map(|s| s.as_str()).collect();
+        for t in &sm.transitions {
+            if t.owner == SmOwner::Model && authority_set.contains(t.to.as_str()) {
+                push(
+                    d,
+                    Span::default(),
+                    Severity::Error,
+                    "sm-authority-inversion",
+                    format!(
+                        "SM '{}': Model-owned transition '{}' --[{}]--> '{}' disposes an authority state; only Script/Human/Gateway may do so",
+                        sm.name, t.from, t.event, t.to
+                    ),
+                );
+            }
+        }
+    }
+}
+

@@ -223,19 +223,53 @@ pub fn compile_with_state_machines(
 ) -> Result<(ProjectDefinition, Vec<StateMachineDef>), Vec<CompileError>> {
     let project = compile_with_mode(source, project_id, base_dir, IncludeMode::Full, None)?;
     let state_machines = extract_state_machines(source);
+    // P6c: run SM validation and surface diagnostics as compile errors so a
+    // bad SM is never silently accepted.
+    let mut sm_diags = Vec::new();
+    crate::validate::validate_state_machines(&state_machines, &mut sm_diags);
+    if !sm_diags.is_empty() {
+        let errs = sm_diags
+            .into_iter()
+            .map(|d| {
+                let span = Span {
+                    start_line: d.line,
+                    start_column: d.column,
+                    end_line: d.end_line,
+                    end_column: d.end_column,
+                };
+                let prefix = d.code.map(|c| format!("[{c}] ")).unwrap_or_default();
+                CompileError::at(span, format!("{prefix}{}", d.message))
+            })
+            .collect();
+        return Err(errs);
+    }
     Ok((project, state_machines))
 }
 
 /// Lenient variant of [`compile_with_state_machines`]: always returns a project,
-/// the extracted state machines, and the collected diagnostics.
+/// the extracted state machines, and the collected diagnostics (including SM
+/// validation diagnostics).
 pub fn compile_lenient_with_state_machines(
     source: &str,
     project_id: Uuid,
     base_dir: Option<&std::path::Path>,
 ) -> (ProjectDefinition, Vec<StateMachineDef>, Vec<CompileError>) {
-    let (project, errors) =
+    let (project, mut errors) =
         compile_lenient(source, project_id, base_dir, IncludeMode::Full, None);
     let state_machines = extract_state_machines(source);
+    // P6c: fold SM diagnostics into the lenient error list.
+    let mut sm_diags = Vec::new();
+    crate::validate::validate_state_machines(&state_machines, &mut sm_diags);
+    for d in sm_diags {
+        let span = Span {
+            start_line: d.line,
+            start_column: d.column,
+            end_line: d.end_line,
+            end_column: d.end_column,
+        };
+        let prefix = d.code.map(|c| format!("[{c}] ")).unwrap_or_default();
+        errors.push(CompileError::at(span, format!("{prefix}{}", d.message)));
+    }
     (project, state_machines, errors)
 }
 
