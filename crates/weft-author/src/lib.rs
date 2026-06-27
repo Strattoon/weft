@@ -5,6 +5,9 @@
 
 pub mod grammar_card;
 pub mod catalog_index;
+
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod context;
 pub mod spec;
 pub mod author;
