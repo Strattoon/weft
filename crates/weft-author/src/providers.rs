@@ -119,13 +119,7 @@ impl OpenRouterAuthor {
             .await
             .context("failed to parse OpenRouter chat completion response")?;
 
-        let content = resp
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|c| c.message)
-            .map(|m| m.content)
-            .ok_or_else(|| anyhow!("OpenRouter response had no choices[0].message.content"))?;
+        let content = extract_content(&resp, &self.model)?;
 
         Ok(strip_code_fences(&content))
     }
@@ -171,7 +165,38 @@ struct Choice {
 
 #[derive(Deserialize)]
 struct AssistantMessage {
-    content: String,
+    content: Option<String>,
+}
+
+// ── extract_content helper ────────────────────────────────────────────────────
+
+/// Extract the text content from the first choice of a [`ChatResponse`].
+///
+/// Factored out of the async HTTP path so it can be tested without network I/O.
+///
+/// # Errors
+/// - No choices: `"OpenRouter returned no choices (model={model})"`.
+/// - `choices[0].message` is `None` (absent): `"OpenRouter returned choices[0].message = null …"`.
+/// - `choices[0].message.content` is `None` (null): `"OpenRouter returned choices[0].message.content = null …"`.
+fn extract_content(resp: &ChatResponse, model: &str) -> Result<String> {
+    let choice = resp.choices.first().ok_or_else(|| {
+        anyhow!("OpenRouter returned no choices (model={model})")
+    })?;
+
+    let message = choice.message.as_ref().ok_or_else(|| {
+        anyhow!(
+            "OpenRouter returned choices[0].message = null — \
+             the model ({model}) returned no message object"
+        )
+    })?;
+
+    message.content.clone().ok_or_else(|| {
+        anyhow!(
+            "OpenRouter returned choices[0].message.content = null — \
+             the model ({model}) emitted no text content \
+             (likely a reasoning/tool-use response with empty content)"
+        )
+    })
 }
 
 // ── BlockingAuthor ────────────────────────────────────────────────────────────
@@ -237,7 +262,38 @@ pub fn strip_code_fences(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_code_fences;
+    use super::{extract_content, strip_code_fences, ChatResponse};
+
+    // ── extract_content tests (pure / no network) ─────────────────────────
+
+    #[test]
+    fn extract_content_ok() {
+        let resp: ChatResponse = serde_json::from_str(
+            r#"{"choices":[{"message":{"content":"x = Text {}"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_content(&resp, "test-model").unwrap(), "x = Text {}");
+    }
+
+    #[test]
+    fn extract_content_errs_on_null_content() {
+        let resp: ChatResponse = serde_json::from_str(
+            r#"{"choices":[{"message":{"content":null}}]}"#,
+        )
+        .unwrap();
+        let err = extract_content(&resp, "cerebras-120b").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("content"), "expected 'content' in error: {msg}");
+        assert!(msg.contains("null"), "expected 'null' in error: {msg}");
+    }
+
+    #[test]
+    fn extract_content_errs_on_no_choices() {
+        let resp: ChatResponse = serde_json::from_str(r#"{"choices":[]}"#).unwrap();
+        let err = extract_content(&resp, "some-model").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no choices"), "expected 'no choices' in error: {msg}");
+    }
 
     #[test]
     fn strip_code_fences_plain_weft_tag() {
