@@ -2675,8 +2675,27 @@ StateMachine RunLifecycle {
 "#;
     let (project, sms) = compile_with_state_machines(source, uuid::Uuid::new_v4(), None)
         .expect("should compile a StateMachine block");
-    // The SM is NOT lowered/flattened into the graph (P6d does that): no nodes.
-    assert_eq!(project.nodes.len(), 0, "SM must not lower into nodes yet");
+    // P6d: a validated SM IS now lowered onto the durable loop spine and folded
+    // into the project. The control skeleton is exactly one `Loop` group with a
+    // LoopIn + LoopOut pair (plus body nodes); the `.weft` source itself
+    // declared no graph nodes, so every node here comes from the SM lowering.
+    assert_eq!(
+        project
+            .groups
+            .iter()
+            .filter(|g| matches!(g.kind, weft_core::project::GroupKind::Loop { .. }))
+            .count(),
+        1,
+        "SM lowers to exactly one Loop group"
+    );
+    assert!(
+        project.nodes.iter().any(|n| n.node_type == "LoopIn"),
+        "lowered LoopIn present"
+    );
+    assert!(
+        project.nodes.iter().any(|n| n.node_type == "LoopOut"),
+        "lowered LoopOut present"
+    );
     assert_eq!(sms.len(), 1, "exactly one StateMachineDef extracted");
     let sm = &sms[0];
     assert_eq!(sm.initial, "HumanRequestCaptured");

@@ -20,6 +20,7 @@ pub mod edit;
 pub mod file_ref;
 pub mod enrich;
 pub mod validate;
+pub mod lower_state_machine;
 pub mod codegen;
 pub mod worker_image;
 pub mod build;

@@ -221,7 +221,7 @@ pub fn compile_with_state_machines(
     project_id: Uuid,
     base_dir: Option<&std::path::Path>,
 ) -> Result<(ProjectDefinition, Vec<StateMachineDef>), Vec<CompileError>> {
-    let project = compile_with_mode(source, project_id, base_dir, IncludeMode::Full, None)?;
+    let mut project = compile_with_mode(source, project_id, base_dir, IncludeMode::Full, None)?;
     let state_machines = extract_state_machines(source);
     // P6c: run SM validation and surface diagnostics as compile errors so a
     // bad SM is never silently accepted.
@@ -242,6 +242,17 @@ pub fn compile_with_state_machines(
             })
             .collect();
         return Err(errs);
+    }
+    // P6d: lower each validated SM onto the durable loop spine and FOLD the
+    // control skeleton into the returned project. Validation above already
+    // proved every SM clean (we only reach here with `sm_diags` empty), so a
+    // malformed SM is never lowered. The lowered loop is a legal While shape
+    // (`lower_state_machine`), so it adds no new loop-config diagnostics.
+    for sm in &state_machines {
+        let (nodes, edges, groups) = crate::lower_state_machine::lower_state_machine(sm);
+        project.nodes.extend(nodes);
+        project.edges.extend(edges);
+        project.groups.extend(groups);
     }
     Ok((project, state_machines))
 }
