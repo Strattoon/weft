@@ -17,3 +17,6 @@ pub mod bench;
 
 #[cfg(feature = "providers")]
 pub mod providers;
+
+#[cfg(feature = "providers")]
+pub mod cli_provider;
