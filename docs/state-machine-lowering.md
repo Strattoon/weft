@@ -98,6 +98,15 @@ optional (`Option<&'static str>` in the source — `transitions.rs:33`).
 
 ### 1.3 Worked example (the brief's `RunLifecycle`)
 
+> **Note — illustrative shape only.** The transition rows below are taken from
+> the design brief to show the grammar. They do NOT match the real Workday
+> `TRANSITIONS` table. In particular, the third row
+> `(HumanApprovalRequired, ApprovalGranted) -> ProductionActionReady owner=human`
+> is fictional; the real row is
+> `(HumanApprovalRequired, HumanApproved) -> ProvenanceRecorded owner=Human`
+> (see §6 and Appendix A). A P6b implementer writing fixtures MUST use §6 /
+> Appendix A, not copy this example verbatim.
+
 ```text
 StateMachine RunLifecycle {
   initial: HumanRequestCaptured
@@ -206,6 +215,13 @@ conditions for free:
 zero-iter path is handled in the engine's LoopIn handler, not relevant here since
 the SM always launches at least the `initial` iteration.)
 
+> **P6d to-confirm:** the above relies on `iter_count` being set to a value that
+> can never satisfy `over_exhausted = (index + 1 >= iter_count)` before `done`
+> or `max_iters` fires. P6d MUST pin the concrete value written to `iter_count`
+> for the `over: []` case (e.g. `u64::MAX`, or omitted/zero interpreted as
+> "unbounded") and add a test asserting `over_exhausted` cannot fire. Until that
+> is confirmed, treat "unreachable" as an assumption, not a proven fact.
+
 ### 2.3 The carry seed = `initial`
 
 On first instantiation, the engine seeds carry from the loop's same-named input
@@ -265,9 +281,20 @@ Concretely against the runtime:
   `DoneVoted` when it is `true` (`loop_runtime.rs:407-409`). This wiring also
   satisfies the `loop-unbounded-no-termination` rule (`done_wired == true`,
   `validate.rs:899-901,915`).
-- When no row matches `(current_state, event)`, the selector is a P6c error
-  (analogous to Workday having no `Transition` row). At runtime an unmatched
-  event is a hard failure (a stuck SM is corruption, never a silent no-op).
+- When no row matches `(current_state, event)`, there are **two distinct
+  guarantees** that are complementary, not the same check:
+  - **P6c table-level totality check (static):** P6c can verify that every
+    event symbol that appears anywhere in the table has at least one outgoing
+    row from each reachable state — i.e. no statically-known `(state, event)`
+    pair is absent. This is analogous to Workday's `transitions_table_is_nonempty`
+    test and catches typos / omitted rows at compile time.
+  - **Runtime hard failure (dynamic):** events produced at runtime by a Model
+    or Script subgraph may not be predictable at compile time. If such a
+    dynamically-produced event has no matching row for the current state, the
+    runtime raises a hard failure — a stuck SM is corruption, never a silent
+    no-op. The runtime path catches what the static check cannot.
+  P6c totality-checking and the runtime hard failure are **both required**;
+  neither subsumes the other.
 
 The router/selector are themselves lowered to existing catalog/control nodes (a
 condition fan-out + a table lookup); P6d decides whether to reuse an existing
@@ -326,6 +353,39 @@ The canonical tag string is `"proposal"` (snake_case canonical per the
 schema doc-comment at `node.rs:486-492`). `owner=script|human|gateway` produce no
 `proposal` tag, so disposing transitions are always permitted into authority
 states.
+
+### 4.4 Hard constraint on P6d: tags must live in catalog node-type metadata
+
+`check_tagged_flow` (`validate.rs:1103-1145`) resolves `forbids_tags` and
+`produces_tags` from **catalog node-type metadata** — specifically from
+`PortDef` fields baked into each node type's `metadata.json` — via a call of
+the form `catalog.lookup(node_type)`. It does NOT read per-instance port
+annotations injected at lowering time into arbitrary control nodes.
+
+This means **the authority-inversion guarantee only holds if the nodes that
+P6d lowers authority states and model-disposing outputs into are real catalog
+node types whose metadata carries the relevant tag fields.** Concretely:
+
+- The **model-disposing output port** (the port that emits the proposal event /
+  artifact for an `owner=model` row) must lower to a catalog node type whose
+  `metadata.json` declares `produces_tags: ["proposal"]` on that port.
+- The **subgraph-entry input port** of each authority state must lower to a
+  catalog node type whose `metadata.json` declares `forbids_tags: ["proposal"]`
+  on that port. Alternatively, P6d may mint per-state catalog node types that
+  carry these tags in their metadata.
+
+**P6d MUST satisfy this constraint. It is not a suggestion.** If P6d lowered
+authority states to generic or untagged control nodes (e.g. a plain `Switch` or
+`Group` whose metadata carries no `forbids_tags`), `check_tagged_flow` would
+never see the `"proposal"` tag on those ports and the authority-inversion
+guarantee would **silently fail** — the compile-time guard would pass without
+catching a `Model`-owned transition into an authority state.
+
+The two acceptable paths for P6d are: (a) reuse existing catalog node types
+that already declare the required tags in `metadata.json`, or (b) mint new
+per-state node types and register them in the catalog with the correct tag
+fields before the validation pass runs. Either way, the tags must be in catalog
+metadata, not attached at runtime.
 
 ---
 
