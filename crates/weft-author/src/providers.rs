@@ -60,8 +60,10 @@ pub struct CallUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
-    /// USD cost OpenRouter charged for this call (None if the provider/model did
-    /// not report a cost).
+    /// Cost OpenRouter charged for this call, taken from the `usage.cost`
+    /// field. OpenRouter denominates this in credits, which are pegged 1:1 to
+    /// USD ($1 = 1 credit), so the value is USD-equivalent. `None` if the
+    /// provider/model did not report a cost.
     pub cost: Option<f64>,
 }
 

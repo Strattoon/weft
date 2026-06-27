@@ -20,6 +20,24 @@ fn violating_candidate_fails_plane_separation() {
     let candidate = base.join("candidates/violating.weft");
     let res = weft_evals::runner::run_task_in_process(&task, &base, &candidate);
     assert_eq!(res.verdict, weft_evals::result::Verdict::Red, "reason: {}", res.reason);
+
+    // Pin the Red to the tagged-flow invariant specifically. Asserting only
+    // `Verdict::Red` would let an unrelated compiler error keep this fixture
+    // green while it silently stops proving plane separation, so require a
+    // `tagged-flow-violation` diagnostic in the serialized diagnostics.
+    let has_tagged_flow = res
+        .diagnostics
+        .as_array()
+        .map(|ds| {
+            ds.iter()
+                .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("tagged-flow-violation"))
+        })
+        .unwrap_or(false);
+    assert!(
+        has_tagged_flow,
+        "expected a tagged-flow-violation diagnostic, got: {}",
+        res.diagnostics
+    );
 }
 
 #[test]

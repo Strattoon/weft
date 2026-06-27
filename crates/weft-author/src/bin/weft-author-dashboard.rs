@@ -199,7 +199,9 @@ mod live {
         prompt_tokens: u64,
         completion_tokens: u64,
         total_tokens: u64,
-        /// Summed USD cost across calls (only counts calls that reported a cost).
+        /// Summed cost across calls (only counts calls that reported a cost).
+        /// Sourced from OpenRouter's `usage.cost`, which is denominated in
+        /// credits pegged 1:1 to USD, so this value is USD-equivalent.
         cost_usd: f64,
         per_call: Vec<CallUsage>,
     }
