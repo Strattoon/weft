@@ -583,6 +583,10 @@ mod live {
             .arg("run")
             .arg("--json")
             .arg("--detach")
+            // Each benchmark run is independent: cancel any executions still
+            // running on the prior worker image so a rebuild isn't blocked.
+            .arg("--running-policy")
+            .arg("cancel")
             .current_dir(project_root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
