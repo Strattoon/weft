@@ -51,6 +51,7 @@ pub fn validate_with_mode(
     check_output_reachability(project, &mut d);
     check_declarative_rules(project, catalog, mode, &mut d);
     check_reserved_names(project, catalog, &mut d);
+    check_tagged_flow(project, catalog, &mut d);
     d.sort_by(|a, b| {
         (a.line, a.column, a.end_line, a.end_column, a.code.as_deref(), a.message.as_str())
             .cmp(&(b.line, b.column, b.end_line, b.end_column, b.code.as_deref(), b.message.as_str()))
@@ -1095,6 +1096,54 @@ fn check_warnings(project: &ProjectDefinition, d: &mut Vec<Diagnostic>) {
     }
 }
 
+/// Tagged-flow (metadata-only): an edge may not carry a tag the target
+/// input port forbids. Tags are read from catalog metadata; this pass does
+/// not depend on enrich or runtime. Forbid-list model: empty lists = no
+/// constraint, so existing nodes are unaffected.
+fn check_tagged_flow(
+    project: &ProjectDefinition,
+    catalog: &dyn MetadataCatalog,
+    d: &mut Vec<Diagnostic>,
+) {
+    let by_id: std::collections::HashMap<&str, &NodeDefinition> =
+        project.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    for edge in &project.edges {
+        let span = edge.span.unwrap_or_default();
+        let Some(src) = by_id.get(edge.source.as_str()) else { continue };
+        let Some(tgt) = by_id.get(edge.target.as_str()) else { continue };
+
+        let Some(src_meta) = catalog.lookup(&src.node_type) else { continue };
+        let Some(tgt_meta) = catalog.lookup(&tgt.node_type) else { continue };
+
+        let Some(src_port) = src_meta
+            .outputs
+            .iter()
+            .find(|p| Some(p.name.as_str()) == edge.source_handle.as_deref())
+        else { continue };
+        let Some(tgt_port) = tgt_meta
+            .inputs
+            .iter()
+            .find(|p| Some(p.name.as_str()) == edge.target_handle.as_deref())
+        else { continue };
+
+        for produced in &src_port.produces_tags {
+            if tgt_port.forbids_tags.contains(produced) {
+                push(
+                    d,
+                    span,
+                    Severity::Error,
+                    "tagged-flow-violation",
+                    format!(
+                        "edge '{}.{}' -> '{}.{}' carries tag '{}', which the target port forbids",
+                        edge.source, src_port.name, edge.target, tgt_port.name, produced,
+                    ),
+                );
+            }
+        }
+    }
+}
+
 /// no-output / unreachable-node: the project's output set is every
 /// node whose `is_output()` resolves to true (Debug defaults to true,
 /// any node can set `is_output: true` in its config). Emit:
@@ -1189,6 +1238,125 @@ fn check_output_reachability(project: &ProjectDefinition, d: &mut Vec<Diagnostic
                 ),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tagged_flow_tests {
+    use super::*;
+    use weft_core::node::{NodeFeatures, NodeMetadata, PortDef};
+    use weft_core::project::{Edge, NodeDefinition, Position, ProjectDefinition};
+    use weft_core::{WeftPrimitive, WeftType};
+    use uuid::Uuid;
+    use chrono::Utc;
+    use serde_json::Value;
+
+    // Minimal NodeMetadata builder — fill only the fields under test.
+    fn node_meta(ty: &str, outputs: Vec<PortDef>, inputs: Vec<PortDef>) -> NodeMetadata {
+        NodeMetadata {
+            node_type: ty.to_string(),
+            label: ty.to_string(),
+            description: String::new(),
+            category: "test".to_string(),
+            tags: vec![],
+            icon: None,
+            color: None,
+            inputs,
+            outputs,
+            fields: vec![],
+            requires_infra: false,
+            images: vec![],
+            features: NodeFeatures::default(),
+            validate: vec![],
+            form_field_specs_ref: None,
+        }
+    }
+
+    // Minimal PortDef builder.
+    fn port(name: &str, produces: &[&str], forbids: &[&str]) -> PortDef {
+        PortDef {
+            name: name.to_string(),
+            port_type: WeftType::Primitive(WeftPrimitive::String),
+            required: false,
+            configurable: false,
+            produces_tags: produces.iter().map(|s| s.to_string()).collect(),
+            forbids_tags: forbids.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    // Minimal NodeDefinition builder.
+    fn node_def(id: &str, ty: &str) -> NodeDefinition {
+        NodeDefinition {
+            id: id.to_string(),
+            node_type: ty.to_string(),
+            label: None,
+            config: Value::Object(Default::default()),
+            position: Position { x: 0.0, y: 0.0 },
+            scope: vec![],
+            group_boundary: None,
+            inputs: vec![],
+            outputs: vec![],
+            features: NodeFeatures::default(),
+            requires_infra: false,
+            images: vec![],
+            span: None,
+            header_span: None,
+            config_spans: Default::default(),
+            file_refs: Default::default(),
+            include_path: None,
+        }
+    }
+
+    // Tiny in-memory catalog.
+    struct StubCat(Vec<NodeMetadata>);
+    impl MetadataCatalog for StubCat {
+        fn lookup(&self, t: &str) -> Option<&NodeMetadata> {
+            self.0.iter().find(|m| m.node_type == t)
+        }
+        fn all(&self) -> Vec<&NodeMetadata> { self.0.iter().collect() }
+    }
+
+    fn tagged_flow_fixture(produces: &[&str], forbids: &[&str])
+        -> (ProjectDefinition, StubCat)
+    {
+        let project = ProjectDefinition {
+            id: Uuid::nil(),
+            nodes: vec![node_def("src", "NodeA"), node_def("dst", "NodeB")],
+            edges: vec![
+                Edge {
+                    id: "e1".to_string(),
+                    source: "src".to_string(),
+                    target: "dst".to_string(),
+                    source_handle: Some("out".to_string()),
+                    target_handle: Some("in".to_string()),
+                    span: None,
+                },
+            ],
+            groups: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let catalog = StubCat(vec![
+            node_meta("NodeA", vec![port("out", produces, &[])], vec![]),
+            node_meta("NodeB", vec![], vec![port("in", &[], forbids)]),
+        ]);
+        (project, catalog)
+    }
+
+    #[test]
+    fn control_tag_into_forbidding_port_is_rejected() {
+        let (project, catalog) = tagged_flow_fixture(&["control"], &["control"]);
+        let mut d = Vec::new();
+        check_tagged_flow(&project, &catalog, &mut d);
+        assert_eq!(d.iter().filter(|x| x.code.as_deref() == Some("tagged-flow-violation")).count(), 1);
+    }
+
+    #[test]
+    fn unrelated_tags_pass() {
+        let (project, catalog) = tagged_flow_fixture(&["control"], &["untrusted"]);
+        let mut d = Vec::new();
+        check_tagged_flow(&project, &catalog, &mut d);
+        assert!(d.is_empty());
     }
 }
 
