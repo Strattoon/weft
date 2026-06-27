@@ -38,7 +38,7 @@ mod live {
 
     // ── Fixture project path (baked in at compile time) ──────────────────────
     const DEFAULT_PROJECT_REL: &str =
-        "../../weft-evals/fixtures/validation_required_ports/001/project";
+        "../weft-evals/fixtures/validation_required_ports/001/project";
 
     fn fixture_project() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_PROJECT_REL)
