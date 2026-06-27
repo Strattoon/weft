@@ -522,19 +522,27 @@ mod live {
         if weft_source.is_empty() {
             return None;
         }
-        // Write source to main.weft first (the project context is needed for catalog resolution)
+        // Write source to main.weft so the @file/@include base + catalog resolve
+        // from the project. NOTE: `weft parse` reads the graph from STDIN; `--file`
+        // only sets the include base. So we must also pipe the source to stdin —
+        // without it parse reads empty stdin and returns an empty project.
         let main_weft = project_root.join("main.weft");
         std::fs::write(&main_weft, weft_source).ok()?;
 
-        let output = std::process::Command::new("weft")
+        use std::io::Write;
+        let mut child = std::process::Command::new("weft")
             .arg("parse")
             .arg("--file")
             .arg(&main_weft)
             .current_dir(project_root)
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .output()
+            .spawn()
             .ok()?;
+        // Feed the source on stdin, then drop the handle to send EOF.
+        child.stdin.take()?.write_all(weft_source.as_bytes()).ok()?;
+        let output = child.wait_with_output().ok()?;
 
         if output.stdout.is_empty() {
             return None;
