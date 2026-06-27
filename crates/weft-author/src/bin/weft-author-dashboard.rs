@@ -185,8 +185,16 @@ mod live {
     }
 
     #[derive(Serialize)]
+    struct ProvenancePayload {
+        planner_backend: String,
+        generator_backend: String,
+    }
+
+    #[derive(Serialize)]
     struct RunResponse {
         model: String,
+        planner_backend: String,
+        generator_backend: String,
         spec_markdown: String,
         status: String,
         rounds: u32,
@@ -231,6 +239,8 @@ mod live {
             .unwrap_or_else(|e| {
                 Ok(RunResponse {
                     model: String::new(),
+                    planner_backend: String::new(),
+                    generator_backend: String::new(),
                     spec_markdown: String::new(),
                     status: "error".into(),
                     rounds: 0,
@@ -245,6 +255,8 @@ mod live {
             Ok(r) => r,
             Err(e) => RunResponse {
                 model: String::new(),
+                planner_backend: String::new(),
+                generator_backend: String::new(),
                 spec_markdown: String::new(),
                 status: "error".into(),
                 rounds: 0,
@@ -385,7 +397,13 @@ mod live {
             }
         };
 
-        // 3. derive_spec — emit `spec` event (non-blocking: no approval wait)
+        // 3. Emit provenance event now that backends are resolved
+        send_event(&tx, "provenance", ProvenancePayload {
+            planner_backend: planner_spec.clone(),
+            generator_backend: generator_spec.clone(),
+        });
+
+        // 4. derive_spec — emit `spec` event (non-blocking: no approval wait)
         let spec = match derive_spec(&planner, &index, &q.chat) {
             Ok(s) => s,
             Err(e) => {
@@ -418,7 +436,7 @@ mod live {
         let tx_ref = &tx;
         let project_ref = &project_root;
 
-        // 4. Authoring loop with per-round events
+        // 5. Authoring loop with per-round events
         let validate = |src: &str| -> Result<Vec<weft_core::node::Diagnostic>, String> {
             let n = round_counter.get() + 1;
             round_counter.set(n);
@@ -487,7 +505,7 @@ mod live {
             },
         );
 
-        // 5. Attempt execution only if green
+        // 6. Attempt execution only if green
         if status_str == "green" {
             match run_weft_detached(&project_root) {
                 Ok(color) => {
@@ -597,6 +615,8 @@ mod live {
 
         Ok(RunResponse {
             model,
+            planner_backend: planner_spec,
+            generator_backend: generator_spec,
             spec_markdown,
             status: status.to_owned(),
             rounds: outcome.rounds,
