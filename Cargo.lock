@@ -3259,12 +3259,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "clap",
  "reqwest",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "weft-catalog",
+ "weft-compiler",
  "weft-core",
  "weft-evals",
 ]

@@ -15,10 +15,13 @@ anyhow = { workspace = true }
 tokio = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+weft-compiler = { path = "../weft-compiler", optional = true }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 
 [features]
 # Live model providers are opt-in; the deterministic core + MockAuthor need none.
-providers = ["dep:tokio", "dep:reqwest", "dep:async-trait"]
+providers = ["dep:tokio", "dep:reqwest", "dep:async-trait", "dep:clap", "dep:weft-compiler", "dep:tempfile"]
