@@ -3261,6 +3261,7 @@ dependencies = [
  "async-trait",
  "axum",
  "clap",
+ "futures",
  "reqwest",
  "serde",
  "serde_json",

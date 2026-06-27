@@ -20,6 +20,7 @@ weft-compiler = { path = "../weft-compiler", optional = true }
 tempfile = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 tower-http = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -28,4 +29,4 @@ tempfile = { workspace = true }
 # Live model providers are opt-in; the deterministic core + MockAuthor need none.
 providers = ["dep:tokio", "dep:reqwest", "dep:async-trait", "dep:clap", "dep:weft-compiler", "dep:tempfile"]
 # Dashboard = axum HTTP server + graph view; pulls in providers.
-dashboard = ["providers", "dep:axum", "dep:tower-http"]
+dashboard = ["providers", "dep:axum", "dep:tower-http", "dep:futures"]
