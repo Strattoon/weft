@@ -13,6 +13,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 
 // ── AsyncAuthor trait ────────────────────────────────────────────────────────
 
@@ -51,6 +52,25 @@ When given a task context, you must reply with ONLY the .weft program source —
 no prose, no explanation, no markdown code fences. \
 Your entire response must be valid .weft source code.";
 
+/// One model call's token usage + cost, as reported by OpenRouter (the `usage`
+/// block, requested via `usage: {include: true}`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallUsage {
+    pub model: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    /// USD cost OpenRouter charged for this call (None if the provider/model did
+    /// not report a cost).
+    pub cost: Option<f64>,
+}
+
+/// Shared, append-only log of per-call usage. The caller (e.g. the dashboard)
+/// creates one and attaches it via [`OpenRouterAuthor::with_usage_log`] so it
+/// can report token spend after a run. CLI backends record nothing here
+/// (subscription-billed, no per-token cost).
+pub type UsageLog = Arc<Mutex<Vec<CallUsage>>>;
+
 /// OpenRouter-compatible HTTP author for any model id.
 pub struct OpenRouterAuthor {
     model: String,
@@ -62,6 +82,8 @@ pub struct OpenRouterAuthor {
     api_key: String,
     base_url: String,
     client: Client,
+    /// Optional shared log; each completion appends its [`CallUsage`].
+    usage_log: Option<UsageLog>,
 }
 
 /// Split a `model@provider[,provider2]` spec into the bare model id and an
@@ -128,12 +150,20 @@ impl OpenRouterAuthor {
             api_key,
             base_url: DEFAULT_BASE_URL.to_owned(),
             client,
+            usage_log: None,
         })
     }
 
     /// Override the base URL (for testing against a compatible endpoint).
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
+        self
+    }
+
+    /// Attach a shared usage log; each completion appends its [`CallUsage`]
+    /// (tokens + cost) so the caller can report token spend after a run.
+    pub fn with_usage_log(mut self, log: UsageLog) -> Self {
+        self.usage_log = Some(log);
         self
     }
 
@@ -153,6 +183,8 @@ impl OpenRouterAuthor {
                 order,
                 allow_fallbacks: false,
             }),
+            // Ask OpenRouter to include token counts + USD cost in the response.
+            usage: Some(UsageReq { include: true }),
         };
 
         let response = self
@@ -181,6 +213,32 @@ impl OpenRouterAuthor {
 
         let content = extract_content(&resp, &self.model)?;
 
+        // Record token usage + cost: always log a line, and append to the shared
+        // log if one is attached. Authoritative cost comes from OpenRouter's
+        // `usage` block (requested via `usage: {include: true}`).
+        if let Some(u) = &resp.usage {
+            let call = CallUsage {
+                model: self.model.clone(),
+                prompt_tokens: u.prompt_tokens.unwrap_or(0),
+                completion_tokens: u.completion_tokens.unwrap_or(0),
+                total_tokens: u.total_tokens.unwrap_or(0),
+                cost: u.cost,
+            };
+            eprintln!(
+                "[usage] model={} prompt={} completion={} total={} cost={}",
+                call.model,
+                call.prompt_tokens,
+                call.completion_tokens,
+                call.total_tokens,
+                call.cost
+                    .map(|c| format!("${c:.6}"))
+                    .unwrap_or_else(|| "n/a".into()),
+            );
+            if let Some(log) = &self.usage_log {
+                log.lock().unwrap().push(call);
+            }
+        }
+
         Ok(strip_code_fences(&content))
     }
 }
@@ -207,6 +265,14 @@ struct ChatRequest {
     messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<ProviderRouting>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<UsageReq>,
+}
+
+/// Request OpenRouter to include the `usage` (tokens + cost) block in responses.
+#[derive(Serialize)]
+struct UsageReq {
+    include: bool,
 }
 
 /// OpenRouter provider-routing block. `order` lists preferred provider slugs;
@@ -226,6 +292,22 @@ struct Message {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+/// OpenRouter usage block. Fields are optional because not every provider
+/// reports all of them (notably `cost`).
+#[derive(Deserialize)]
+struct Usage {
+    #[serde(default)]
+    prompt_tokens: Option<u64>,
+    #[serde(default)]
+    completion_tokens: Option<u64>,
+    #[serde(default)]
+    total_tokens: Option<u64>,
+    #[serde(default)]
+    cost: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -335,6 +417,27 @@ mod tests {
     use super::{
         default_provider_order, extract_content, parse_model_spec, strip_code_fences, ChatResponse,
     };
+
+    #[test]
+    fn parses_usage_block_with_cost() {
+        let resp: ChatResponse = serde_json::from_str(
+            r#"{"choices":[{"message":{"content":"x"}}],
+                "usage":{"prompt_tokens":1200,"completion_tokens":80,"total_tokens":1280,"cost":0.000123}}"#,
+        )
+        .unwrap();
+        let u = resp.usage.expect("usage present");
+        assert_eq!(u.prompt_tokens, Some(1200));
+        assert_eq!(u.completion_tokens, Some(80));
+        assert_eq!(u.total_tokens, Some(1280));
+        assert!((u.cost.unwrap() - 0.000123).abs() < 1e-9);
+    }
+
+    #[test]
+    fn usage_absent_deserializes_to_none() {
+        let resp: ChatResponse =
+            serde_json::from_str(r#"{"choices":[{"message":{"content":"x"}}]}"#).unwrap();
+        assert!(resp.usage.is_none());
+    }
 
     #[test]
     fn default_provider_order_pins_gpt_oss_to_cerebras() {

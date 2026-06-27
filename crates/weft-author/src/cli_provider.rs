@@ -94,7 +94,7 @@ pub fn parse_backend_spec(s: &str) -> Result<BackendSpec> {
     ))
 }
 
-use crate::providers::{strip_code_fences, AsyncAuthor, OpenRouterAuthor};
+use crate::providers::{strip_code_fences, AsyncAuthor, OpenRouterAuthor, UsageLog};
 use async_trait::async_trait;
 use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -359,9 +359,23 @@ pub fn resolve_backend(
     spec: &str,
     mode: RuntimeMode,
 ) -> Result<Box<dyn AsyncAuthor + Send + Sync>> {
+    resolve_backend_with_usage(spec, mode, None)
+}
+
+/// Like [`resolve_backend`], but attaches a shared [`UsageLog`] to an
+/// `openrouter:` backend so the caller can report token spend after a run.
+/// CLI backends ignore the log (subscription-billed, no per-token cost).
+pub fn resolve_backend_with_usage(
+    spec: &str,
+    mode: RuntimeMode,
+    usage_log: Option<UsageLog>,
+) -> Result<Box<dyn AsyncAuthor + Send + Sync>> {
     match parse_backend_spec(spec)? {
         BackendSpec::OpenRouter(model) => {
-            let a = OpenRouterAuthor::from_env(model)?;
+            let mut a = OpenRouterAuthor::from_env(model)?;
+            if let Some(log) = usage_log {
+                a = a.with_usage_log(log);
+            }
             Ok(Box::new(a))
         }
         // Local-only gate FIRST: never resolve a CLI backend in hosted mode,

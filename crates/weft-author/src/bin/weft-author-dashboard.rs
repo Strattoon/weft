@@ -29,12 +29,13 @@ mod live {
     use serde::{Deserialize, Serialize};
     use std::convert::Infallible;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc;
     use weft_author::authoring::{author_until_green, AuthorStatus};
     use weft_author::catalog_index::NodeIndex;
-    use weft_author::cli_provider::{resolve_backend, RuntimeMode};
+    use weft_author::cli_provider::{resolve_backend, resolve_backend_with_usage, RuntimeMode};
     use weft_author::intent::derive_spec;
-    use weft_author::providers::BlockingAuthor;
+    use weft_author::providers::{BlockingAuthor, CallUsage, UsageLog};
     use weft_compiler::build::build_project_catalog;
     use weft_compiler::validate_file;
     use weft_core::node::Severity;
@@ -190,11 +191,44 @@ mod live {
         generator_backend: String,
     }
 
+    /// Token + cost rollup for one backend over a run (summed across all its
+    /// model calls). Empty for CLI/subscription backends (no per-token cost).
+    #[derive(Serialize, Default)]
+    struct UsageSummary {
+        calls: usize,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        total_tokens: u64,
+        /// Summed USD cost across calls (only counts calls that reported a cost).
+        cost_usd: f64,
+        per_call: Vec<CallUsage>,
+    }
+
+    impl UsageSummary {
+        fn from_log(log: &UsageLog) -> Self {
+            let calls = log.lock().unwrap().clone();
+            let mut s = UsageSummary {
+                calls: calls.len(),
+                per_call: calls.clone(),
+                ..Default::default()
+            };
+            for c in &calls {
+                s.prompt_tokens += c.prompt_tokens;
+                s.completion_tokens += c.completion_tokens;
+                s.total_tokens += c.total_tokens;
+                s.cost_usd += c.cost.unwrap_or(0.0);
+            }
+            s
+        }
+    }
+
     #[derive(Serialize)]
     struct RunResponse {
         model: String,
         planner_backend: String,
         generator_backend: String,
+        planner_usage: UsageSummary,
+        generator_usage: UsageSummary,
         spec_markdown: String,
         status: String,
         rounds: u32,
@@ -241,6 +275,8 @@ mod live {
                     model: String::new(),
                     planner_backend: String::new(),
                     generator_backend: String::new(),
+                    planner_usage: UsageSummary::default(),
+                    generator_usage: UsageSummary::default(),
                     spec_markdown: String::new(),
                     status: "error".into(),
                     rounds: 0,
@@ -257,6 +293,8 @@ mod live {
                 model: String::new(),
                 planner_backend: String::new(),
                 generator_backend: String::new(),
+                planner_usage: UsageSummary::default(),
+                generator_usage: UsageSummary::default(),
                 spec_markdown: String::new(),
                 status: "error".into(),
                 rounds: 0,
@@ -551,12 +589,22 @@ mod live {
         let generator_spec = resolve_generator(req.generator.clone(), req.model.clone());
         let planner_spec = resolve_planner(req.planner.clone(), &generator_spec);
 
-        let planner_inner = resolve_backend(&planner_spec, RuntimeMode::LocalDev)
-            .map_err(|e| format!("planner backend: {e}"))?;
+        // Usage logs so we can report per-backend token spend after the run.
+        // Only `openrouter:` backends populate these; CLI backends record nothing.
+        let planner_log: UsageLog = Arc::new(Mutex::new(Vec::new()));
+        let generator_log: UsageLog = Arc::new(Mutex::new(Vec::new()));
+
+        let planner_inner =
+            resolve_backend_with_usage(&planner_spec, RuntimeMode::LocalDev, Some(planner_log.clone()))
+                .map_err(|e| format!("planner backend: {e}"))?;
         let planner = BlockingAuthor::new(planner_inner)
             .map_err(|e| format!("BlockingAuthor(planner): {e}"))?;
-        let generator_inner = resolve_backend(&generator_spec, RuntimeMode::LocalDev)
-            .map_err(|e| format!("generator backend: {e}"))?;
+        let generator_inner = resolve_backend_with_usage(
+            &generator_spec,
+            RuntimeMode::LocalDev,
+            Some(generator_log.clone()),
+        )
+        .map_err(|e| format!("generator backend: {e}"))?;
         let generator = BlockingAuthor::new(generator_inner)
             .map_err(|e| format!("BlockingAuthor(generator): {e}"))?;
 
@@ -617,6 +665,8 @@ mod live {
             model,
             planner_backend: planner_spec,
             generator_backend: generator_spec,
+            planner_usage: UsageSummary::from_log(&planner_log),
+            generator_usage: UsageSummary::from_log(&generator_log),
             spec_markdown,
             status: status.to_owned(),
             rounds: outcome.rounds,
