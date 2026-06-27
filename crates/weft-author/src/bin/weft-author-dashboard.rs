@@ -92,11 +92,39 @@ mod live {
         }
     }
 
+    /// Default generator backend spec (auto-routes gpt-oss to Cerebras).
+    fn default_generator_spec() -> String {
+        format!("openrouter:{DEFAULT_NODE_GENERATOR}")
+    }
+
+    /// Generator backend: explicit `generator` field wins; otherwise PRESERVE the
+    /// legacy `model` field's behavior by wrapping it as an `openrouter:` spec.
+    /// This keeps old clients that send only `model` controlling generation —
+    /// `resolve_model` already maps empty → DEFAULT_NODE_GENERATOR, so an absent
+    /// `model` still lands on the default. Backward-compatible.
+    fn resolve_generator(generator: Option<String>, legacy_model: String) -> String {
+        generator
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| format!("openrouter:{}", resolve_model(legacy_model)))
+    }
+
+    /// Planner backend: explicit `planner` field, else same as the generator
+    /// (backward compatible — planner defaults to whatever drives generation).
+    fn resolve_planner(planner: Option<String>, generator_spec: &str) -> String {
+        planner
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| generator_spec.to_string())
+    }
+
     #[derive(Deserialize)]
     struct RunRequest {
         chat: String,
         #[serde(default = "default_model")]
         model: String,
+        #[serde(default)]
+        planner: Option<String>,
+        #[serde(default)]
+        generator: Option<String>,
         max_rounds: u32,
     }
 
@@ -105,6 +133,10 @@ mod live {
         chat: String,
         #[serde(default = "default_model")]
         model: String,
+        #[serde(default)]
+        planner: Option<String>,
+        #[serde(default)]
+        generator: Option<String>,
         max_rounds: u32,
     }
 

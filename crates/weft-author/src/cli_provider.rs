@@ -94,7 +94,7 @@ pub fn parse_backend_spec(s: &str) -> Result<BackendSpec> {
     ))
 }
 
-use crate::providers::{strip_code_fences, AsyncAuthor};
+use crate::providers::{strip_code_fences, AsyncAuthor, OpenRouterAuthor};
 use async_trait::async_trait;
 use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -342,6 +342,74 @@ async fn probe_backend_def(b: &'static CliBackend) -> Result<()> {
 pub async fn probe_backend(name: &str) -> Result<()> {
     let b = lookup_cli(name).ok_or_else(|| anyhow!("unknown cli backend '{name}'"))?;
     probe_backend_def(b).await
+}
+
+/// Where the harness is running. CLI backends are LOCAL-ONLY and are
+/// mechanically blocked in `Hosted` — even a valid `cli:` spec errors there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeMode {
+    LocalDev,
+    Hosted,
+}
+
+/// Resolve a backend spec to a live `AsyncAuthor`. `openrouter:` works in any
+/// mode; `cli:` is rejected unless `mode == LocalDev` AND the backend is
+/// enabled-by-default or has a cached probe pass.
+pub fn resolve_backend(
+    spec: &str,
+    mode: RuntimeMode,
+) -> Result<Box<dyn AsyncAuthor + Send + Sync>> {
+    match parse_backend_spec(spec)? {
+        BackendSpec::OpenRouter(model) => {
+            let a = OpenRouterAuthor::from_env(model)?;
+            Ok(Box::new(a))
+        }
+        // Local-only gate FIRST: never resolve a CLI backend in hosted mode,
+        // regardless of probe/cache state.
+        BackendSpec::Cli(_) if mode != RuntimeMode::LocalDev => Err(anyhow!(
+            "CLI backends are local-only and disabled in hosted mode"
+        )),
+        BackendSpec::Cli(name) => match status_of(&name) {
+            CliBackendStatus::EnabledByDefault | CliBackendStatus::ProbePassed => {
+                let b = lookup_cli(&name).expect("validated by parse_backend_spec");
+                Ok(Box::new(CliAuthor::new(b)))
+            }
+            CliBackendStatus::ProbeRequired => Err(anyhow!(
+                "cli:{name} is disabled until probed — run `weft-author-probe-cli --backend cli:{name}`"
+            )),
+            CliBackendStatus::ProbeFailed => Err(anyhow!("cli:{name} is not usable")),
+        },
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    // Share the SAME process-global CWD lock + guard as the cache tests.
+    use super::{lock_cwd, ChdirGuard};
+
+    #[test]
+    fn resolve_rejects_unprobed_codex_in_local_dev() {
+        let _lock = lock_cwd();
+        let dir = tempfile::tempdir().unwrap();
+        let _g = ChdirGuard::to(dir.path());
+        let r = resolve_backend("cli:codex", RuntimeMode::LocalDev);
+        assert!(r.is_err());
+        assert!(r.err().unwrap().to_string().contains("disabled until probed"));
+    }
+
+    #[test]
+    fn resolve_rejects_cli_in_hosted_mode() {
+        // Even claude-p (enabled-by-default) is blocked in hosted mode.
+        let r = resolve_backend("cli:claude-p", RuntimeMode::Hosted);
+        assert!(r.is_err());
+        assert!(r.err().unwrap().to_string().contains("local-only"));
+    }
+
+    #[test]
+    fn resolve_rejects_unknown_scheme() {
+        assert!(resolve_backend("shell:bash", RuntimeMode::LocalDev).is_err());
+    }
 }
 
 #[cfg(test)]
