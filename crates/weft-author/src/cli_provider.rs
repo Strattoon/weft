@@ -252,6 +252,127 @@ impl AsyncAuthor for CliAuthor {
     }
 }
 
+use std::path::PathBuf;
+
+pub const PROBE_OK: &str = "WEFT_CLI_PROBE_OK";
+pub const PROBE_PROMPT: &str = "Reply with exactly:\nWEFT_CLI_PROBE_OK";
+
+/// Local probe cache file: `.weft/author-cli-probes.json` under the CWD.
+pub fn probe_cache_path() -> PathBuf {
+    PathBuf::from(".weft").join("author-cli-probes.json")
+}
+
+fn load_cache() -> serde_json::Map<String, serde_json::Value> {
+    match std::fs::read_to_string(probe_cache_path()) {
+        Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default(),
+        Err(_) => serde_json::Map::new(),
+    }
+}
+
+pub fn cached_probe_passed(name: &str) -> bool {
+    load_cache()
+        .get(name)
+        .and_then(|e| e.get("passed"))
+        .and_then(|p| p.as_bool())
+        .unwrap_or(false)
+}
+
+/// Resolution-time usability: enabled-by-default backends are always usable;
+/// others require a cached probe pass.
+pub fn status_of(name: &str) -> CliBackendStatus {
+    match lookup_cli(name) {
+        None => CliBackendStatus::ProbeFailed,
+        Some(b) if b.enabled_by_default => CliBackendStatus::EnabledByDefault,
+        Some(_) if cached_probe_passed(name) => CliBackendStatus::ProbePassed,
+        Some(_) => CliBackendStatus::ProbeRequired,
+    }
+}
+
+fn write_cache_pass(b: &CliBackend) -> Result<()> {
+    let mut cache = load_cache();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    cache.insert(
+        b.name.to_string(),
+        serde_json::json!({
+            "passed": true,
+            "program": b.program,
+            "args": b.args,
+            "checked_at": now,
+        }),
+    );
+    if let Some(dir) = probe_cache_path().parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(probe_cache_path(), serde_json::to_string_pretty(&cache)?)?;
+    Ok(())
+}
+
+/// Probe a backend DEFINITION directly via the RAW path. The probe contract is
+/// strict: the CLI must emit ONLY the token as final text — fenced output,
+/// chatter, logs, non-zero exit, or truncated streams all FAIL. We therefore use
+/// `run_raw` (NOT `propose`, which strips fences and would let `\`\`\`OK\`\`\``
+/// pass). On pass, record the backend in the cache.
+async fn probe_backend_def(b: &'static CliBackend) -> Result<()> {
+    let raw = CliAuthor::new(b).run_raw(PROBE_PROMPT.to_string()).await?;
+    let passed = raw.status.success()
+        && raw.stdout.trim() == PROBE_OK
+        && !raw.stdout_truncated
+        && !raw.stderr_truncated;
+    if passed {
+        write_cache_pass(b)?;
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "probe for '{}' failed: expected exactly {PROBE_OK:?} as the ONLY raw stdout (exit 0, untruncated); got status {:?}, stdout {:?} (fences/chatter/logs => needs a normalizing wrapper)",
+            b.name,
+            raw.status.code(),
+            raw.stdout.trim()
+        ))
+    }
+}
+
+/// Run the exact-match probe against a registry backend by name. On pass, record
+/// it in the cache.
+pub async fn probe_backend(name: &str) -> Result<()> {
+    let b = lookup_cli(name).ok_or_else(|| anyhow!("unknown cli backend '{name}'"))?;
+    probe_backend_def(b).await
+}
+
+#[cfg(test)]
+pub(crate) static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Acquire the CWD lock, recovering from poisoning so one panicking test does not
+/// cascade-fail every other CWD test.
+#[cfg(test)]
+pub(crate) fn lock_cwd() -> std::sync::MutexGuard<'static, ()> {
+    CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Test-only CWD guard: chdir on construction, restore on drop. Hold a `lock_cwd`
+/// guard for the whole scope alongside it.
+#[cfg(test)]
+pub(crate) struct ChdirGuard(std::path::PathBuf);
+#[cfg(test)]
+impl ChdirGuard {
+    pub(crate) fn to(p: &std::path::Path) -> Self {
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(p).unwrap();
+        ChdirGuard(prev)
+    }
+}
+#[cfg(test)]
+impl Drop for ChdirGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +488,64 @@ mod tests {
         };
         let out = CliAuthor::new(&NONUTF8).propose("x").await.unwrap();
         assert!(out.contains("[non-utf8-lossy]"), "got: {out:?}");
+    }
+
+    use super::{
+        cached_probe_passed, lock_cwd, probe_backend_def, status_of, ChdirGuard,
+        CliBackendStatus,
+    };
+
+    #[tokio::test]
+    async fn probe_pass_writes_cache_and_flips_status() {
+        let _lock = lock_cwd();
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = ChdirGuard::to(dir.path());
+
+        // A fake "codex"-like backend that emits EXACTLY the probe token and exits 0.
+        // Reuse the real `codex` registry name (probe-gated) so we exercise the
+        // gated path, but with a printf program instead of the real CLI.
+        static FAKE_OK: CliBackend = CliBackend {
+            name: "codex", program: "printf", args: &["WEFT_CLI_PROBE_OK"],
+            timeout_secs: 5, max_stdout_bytes: 1024, max_stderr_bytes: 1024,
+            enabled_by_default: false,
+        };
+
+        // Before: gated, no cache.
+        assert_eq!(status_of("codex"), CliBackendStatus::ProbeRequired);
+        assert!(!cached_probe_passed("codex"));
+
+        // Probe the fake def directly → writes the cache on pass.
+        probe_backend_def(&FAKE_OK).await.unwrap();
+
+        // After: cache written and status flipped.
+        assert!(cached_probe_passed("codex"));
+        assert_eq!(status_of("codex"), CliBackendStatus::ProbePassed);
+    }
+
+    #[tokio::test]
+    async fn probe_rejects_fenced_output() {
+        let _lock = lock_cwd();
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = ChdirGuard::to(dir.path());
+
+        // Emits the token wrapped in a code fence → must FAIL (raw stdout != token),
+        // proving the probe does NOT strip fences.
+        static FAKE_FENCED: CliBackend = CliBackend {
+            name: "codex", program: "printf", args: &["```\nWEFT_CLI_PROBE_OK\n```"],
+            timeout_secs: 5, max_stdout_bytes: 1024, max_stderr_bytes: 1024,
+            enabled_by_default: false,
+        };
+        assert!(probe_backend_def(&FAKE_FENCED).await.is_err());
+        assert!(!cached_probe_passed("codex"));
+    }
+
+    #[test]
+    fn status_enabled_for_claude_p_and_required_for_codex_without_cache() {
+        let _lock = lock_cwd();
+        let dir = tempfile::tempdir().unwrap();
+        let _g = ChdirGuard::to(dir.path());
+        assert_eq!(status_of("claude-p"), CliBackendStatus::EnabledByDefault);
+        assert_eq!(status_of("codex"), CliBackendStatus::ProbeRequired);
+        assert!(!cached_probe_passed("codex"));
     }
 }

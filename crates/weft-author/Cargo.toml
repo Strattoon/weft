@@ -25,6 +25,10 @@ futures = { workspace = true, optional = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
+[[bin]]
+name = "weft-author-probe-cli"
+required-features = ["providers"]
+
 [features]
 # Live model providers are opt-in; the deterministic core + MockAuthor need none.
 providers = ["dep:tokio", "dep:reqwest", "dep:async-trait", "dep:clap", "dep:weft-compiler", "dep:tempfile"]
