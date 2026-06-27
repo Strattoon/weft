@@ -3254,6 +3254,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "weft-author"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "weft-catalog",
+ "weft-core",
+ "weft-evals",
+]
+
+[[package]]
 name = "weft-broker"
 version = "0.2.0"
 dependencies = [
@@ -3467,6 +3480,19 @@ dependencies = [
  "weft-platform-traits",
  "weft-storage",
  "weft-task-store",
+]
+
+[[package]]
+name = "weft-evals"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "weft-catalog",
+ "weft-compiler",
+ "weft-core",
 ]
 
 [[package]]
