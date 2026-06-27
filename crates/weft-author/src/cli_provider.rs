@@ -365,7 +365,9 @@ pub fn resolve_backend(
             Ok(Box::new(a))
         }
         // Local-only gate FIRST: never resolve a CLI backend in hosted mode,
-        // regardless of probe/cache state.
+        // regardless of probe/cache state. Phrased as `!= LocalDev` (not
+        // `== Hosted`) deliberately: if a third RuntimeMode is ever added, this
+        // stays safe-by-default (any non-LocalDev mode blocks CLI backends).
         BackendSpec::Cli(_) if mode != RuntimeMode::LocalDev => Err(anyhow!(
             "CLI backends are local-only and disabled in hosted mode"
         )),
