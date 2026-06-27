@@ -542,6 +542,41 @@ mod live {
         serde_json::from_slice(&output.stdout).ok()
     }
 
+    /// Extract the execution color from `weft run --json` JSONL stdout.
+    ///
+    /// `weft run --json` emits one JSON object per line (JSONL), one per phase.
+    /// The color lives in the `dispatcher_call_done` phase line:
+    ///   `{"verb":"run","phase":"dispatcher_call_done","detail":{"color":"<uuid>",...}}`
+    ///
+    /// Strategy: scan all parseable lines; prefer a line with `detail.color` that is
+    /// a string (the `dispatcher_call_done` line). Returns `None` if no color found.
+    pub(crate) fn extract_run_color(stdout: &str) -> Option<String> {
+        let mut found: Option<String> = None;
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(color) = v
+                    .get("detail")
+                    .and_then(|d| d.get("color"))
+                    .and_then(|c| c.as_str())
+                {
+                    // Return immediately on a dedicated dispatcher_call_done hit
+                    if v.get("phase").and_then(|p| p.as_str()) == Some("dispatcher_call_done") {
+                        return Some(color.to_string());
+                    }
+                    // Keep as fallback if we find a color anywhere else
+                    if found.is_none() {
+                        found = Some(color.to_string());
+                    }
+                }
+            }
+        }
+        found
+    }
+
     /// Run `weft run --json --detach` in the project dir and parse the `color` UUID.
     fn run_weft_detached(project_root: &Path) -> Result<String, String> {
         let output = std::process::Command::new("weft")
@@ -554,20 +589,81 @@ mod live {
             .output()
             .map_err(|e| format!("failed to spawn `weft run`: {e}"))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("weft run failed: {stderr}"));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Try to extract color from JSONL output first.
+        // If a color is found the run started successfully regardless of exit code.
+        if let Some(color) = extract_run_color(&stdout) {
+            return Ok(color);
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Parse JSON — expect `{"color":"<uuid>", ...}`
-        let v: serde_json::Value = serde_json::from_str(stdout.trim())
-            .map_err(|e| format!("weft run output was not JSON: {e} — raw: {stdout}"))?;
+        // No color found — surface a meaningful error.
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let tail: String = stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+            return Err(format!(
+                "weft run failed (exit {:?}): {tail}",
+                output.status.code()
+            ));
+        }
 
-        v["color"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| format!("weft run JSON had no `color` field: {stdout}"))
+        // Process exited zero but no color in output — report last parsed phase or raw tail.
+        let last_phase: Option<String> = stdout
+            .lines()
+            .filter_map(|l| {
+                serde_json::from_str::<serde_json::Value>(l.trim()).ok()
+            })
+            .filter_map(|v| v.get("phase").and_then(|p| p.as_str()).map(|s| s.to_string()))
+            .last();
+
+        let detail = if let Some(phase) = last_phase {
+            format!("last phase: {phase}")
+        } else {
+            let raw: String = stdout.chars().take(200).collect();
+            format!("raw output: {raw}")
+        };
+
+        Err(format!("weft run produced no color — {detail}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::extract_run_color;
+
+        const SAMPLE_JSONL: &str = r#"{"ts_unix":1,"verb":"run","phase":"build_skip","detail":{"image":"abc"}}
+{"ts_unix":2,"verb":"run","phase":"image_push_start","detail":{}}
+{"ts_unix":3,"verb":"run","phase":"dispatcher_call_done","detail":{"color":"ebbca52b-2d9f-4530-8236-b16f417e3ae3","project_id":"p1"}}
+{"ts_unix":4,"verb":"run","phase":"complete","detail":{"summary":"started ebbca52b-2d9f-4530-8236-b16f417e3ae3"}}"#;
+
+        #[test]
+        fn extract_run_color_finds_color_in_jsonl() {
+            let color = extract_run_color(SAMPLE_JSONL);
+            assert_eq!(
+                color.as_deref(),
+                Some("ebbca52b-2d9f-4530-8236-b16f417e3ae3")
+            );
+        }
+
+        #[test]
+        fn extract_run_color_returns_none_for_empty() {
+            assert_eq!(extract_run_color(""), None);
+        }
+
+        #[test]
+        fn extract_run_color_returns_none_for_colorless_jsonl() {
+            let no_color = r#"{"ts_unix":1,"verb":"run","phase":"build_skip","detail":{"image":"abc"}}
+{"ts_unix":4,"verb":"run","phase":"complete","detail":{"summary":"done"}}"#;
+            assert_eq!(extract_run_color(no_color), None);
+        }
+
+        #[test]
+        fn extract_run_color_ignores_non_json_lines() {
+            let mixed = "not json at all\n{\"ts_unix\":1,\"verb\":\"run\",\"phase\":\"dispatcher_call_done\",\"detail\":{\"color\":\"aabbccdd-0000-0000-0000-000000000000\"}}";
+            assert_eq!(
+                extract_run_color(mixed).as_deref(),
+                Some("aabbccdd-0000-0000-0000-000000000000")
+            );
+        }
     }
 
     // ── Server entry point ────────────────────────────────────────────────────
