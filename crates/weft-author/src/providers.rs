@@ -42,9 +42,32 @@ Your entire response must be valid .weft source code.";
 /// OpenRouter-compatible HTTP author for any model id.
 pub struct OpenRouterAuthor {
     model: String,
+    /// Optional OpenRouter provider-routing order (e.g. `["Cerebras"]`), parsed
+    /// from a `model@provider` spec. When set, the request pins these providers
+    /// with fallbacks disabled, so e.g. `openai/gpt-oss-120b@Cerebras` actually
+    /// runs on Cerebras (and errors rather than silently routing elsewhere).
+    provider_order: Option<Vec<String>>,
     api_key: String,
     base_url: String,
     client: Client,
+}
+
+/// Split a `model@provider[,provider2]` spec into the bare model id and an
+/// optional provider-routing list. A plain id (no `@`) yields `None`.
+/// Provider names must match OpenRouter's provider slugs (e.g. `Cerebras`).
+fn parse_model_spec(spec: &str) -> (String, Option<Vec<String>>) {
+    match spec.split_once('@') {
+        Some((model, providers)) => {
+            let order: Vec<String> = providers
+                .split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect();
+            let order = if order.is_empty() { None } else { Some(order) };
+            (model.trim().to_string(), order)
+        }
+        None => (spec.trim().to_string(), None),
+    }
 }
 
 impl OpenRouterAuthor {
@@ -70,8 +93,11 @@ impl OpenRouterAuthor {
             .build()
             .context("failed to build reqwest client")?;
 
+        let (model, provider_order) = parse_model_spec(&model.into());
+
         Ok(Self {
-            model: model.into(),
+            model,
+            provider_order,
             api_key,
             base_url: DEFAULT_BASE_URL.to_owned(),
             client,
@@ -93,6 +119,13 @@ impl OpenRouterAuthor {
                 Message { role: "system".into(), content: SYSTEM_PROMPT.into() },
                 Message { role: "user".into(), content: user_message },
             ],
+            // Pin the provider(s) when a `model@provider` spec was given, with
+            // fallbacks off so the benchmark measures that provider (e.g.
+            // Cerebras) rather than whatever OpenRouter would otherwise pick.
+            provider: self.provider_order.clone().map(|order| ProviderRouting {
+                order,
+                allow_fallbacks: false,
+            }),
         };
 
         let response = self
@@ -145,6 +178,16 @@ impl AsyncAuthor for OpenRouterAuthor {
 struct ChatRequest {
     model: String,
     messages: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<ProviderRouting>,
+}
+
+/// OpenRouter provider-routing block. `order` lists preferred provider slugs;
+/// `allow_fallbacks: false` pins to them (errors if none can serve the model).
+#[derive(Serialize)]
+struct ProviderRouting {
+    order: Vec<String>,
+    allow_fallbacks: bool,
 }
 
 #[derive(Serialize)]
@@ -262,7 +305,38 @@ pub fn strip_code_fences(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_content, strip_code_fences, ChatResponse};
+    use super::{extract_content, parse_model_spec, strip_code_fences, ChatResponse};
+
+    // ── parse_model_spec tests ────────────────────────────────────────────
+
+    #[test]
+    fn parse_model_spec_plain_has_no_provider() {
+        assert_eq!(
+            parse_model_spec("openai/gpt-4o-mini"),
+            ("openai/gpt-4o-mini".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn parse_model_spec_single_provider() {
+        let (model, order) = parse_model_spec("openai/gpt-oss-120b@Cerebras");
+        assert_eq!(model, "openai/gpt-oss-120b");
+        assert_eq!(order, Some(vec!["Cerebras".to_string()]));
+    }
+
+    #[test]
+    fn parse_model_spec_multi_provider_and_trims() {
+        let (model, order) = parse_model_spec("x/y @ Cerebras, Groq");
+        assert_eq!(model, "x/y");
+        assert_eq!(order, Some(vec!["Cerebras".to_string(), "Groq".to_string()]));
+    }
+
+    #[test]
+    fn parse_model_spec_empty_provider_is_none() {
+        let (model, order) = parse_model_spec("x/y@");
+        assert_eq!(model, "x/y");
+        assert_eq!(order, None);
+    }
 
     // ── extract_content tests (pure / no network) ─────────────────────────
 
