@@ -1,2 +1,7 @@
+# This fixture tests tagged-flow plane separation only.
+# ControlSource.out is intentionally left unconsumed; the resulting
+# orphan-outputs Warning is benign because scoring counts only Error-severity
+# diagnostics. TaskSink { _is_output: true } satisfies output-reachability
+# so this clean graph is genuinely Green.
 src = ControlSource
 sink = TaskSink { _is_output: true }
