@@ -55,10 +55,9 @@ mod live {
     }
 
     fn default_project() -> PathBuf {
-        // CARGO_MANIFEST_DIR is set by cargo at build time; resolve relative to it.
-        let manifest = std::env::var("CARGO_MANIFEST_DIR")
-            .unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(manifest).join(DEFAULT_PROJECT_REL)
+        // Use compile-time CARGO_MANIFEST_DIR macro so the path is baked into the binary
+        // and correct regardless of how the binary is invoked (cargo run or bare binary).
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_PROJECT_REL)
     }
 
     /// Recursively copy `src` dir into `dst` (dst must not exist yet).
