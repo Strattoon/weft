@@ -9,6 +9,10 @@ pub struct AuthoringSpec {
     pub steps: Vec<String>,
     pub selected_nodes: Vec<String>,
     pub io: String,
+    /// Optional, planner-supplied decomposition hints. Generator IGNORES these
+    /// in slice 1; promoted to a typed contract in a later slice.
+    #[serde(default)]
+    pub group_hints: Vec<String>,
 }
 
 impl AuthoringSpec {
@@ -30,6 +34,7 @@ mod tests {
             steps: vec!["form trigger".into(), "send email".into()],
             selected_nodes: vec!["HumanTrigger".into(), "SendEmail".into()],
             io: "in: form fields; out: email".into(),
+            group_hints: vec![],
         };
         let md = spec.to_markdown();
         assert!(md.contains("**Goal:**"));

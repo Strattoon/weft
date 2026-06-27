@@ -115,7 +115,112 @@ fn parse_spec_tolerant(json: &str) -> Result<AuthoringSpec> {
         None => String::new(),
     };
 
-    Ok(AuthoringSpec { goal, steps, selected_nodes, io })
+    // group_hints: array of strings; missing → []
+    let group_hints = match v.get("group_hints") {
+        Some(serde_json::Value::Array(arr)) => arr.iter().map(array_elem_to_string).collect(),
+        _ => vec![],
+    };
+
+    Ok(AuthoringSpec { goal, steps, selected_nodes, io, group_hints })
+}
+
+/// Tiny case-insensitive prefix helper.
+trait StripPrefixCi { fn strip_prefix_ci(&self, p: &str) -> Option<&str>; }
+impl StripPrefixCi for str {
+    fn strip_prefix_ci(&self, p: &str) -> Option<&str> {
+        if self.len() >= p.len() && self[..p.len()].eq_ignore_ascii_case(p) {
+            Some(&self[p.len()..])
+        } else { None }
+    }
+}
+
+/// Parse a structured-prose plan with headings. Returns None if the required
+/// `Goal:` and `Steps:` headings are absent. Preserves human-authored text
+/// verbatim (no summarization).
+fn parse_prose_plan(s: &str) -> Option<AuthoringSpec> {
+    let mut goal = String::new();
+    let mut io = String::new();
+    let mut steps: Vec<String> = Vec::new();
+    let mut nodes: Vec<String> = Vec::new();
+    let mut groups: Vec<String> = Vec::new();
+    let mut section: Option<&str> = None;
+    let mut saw_goal = false;
+    let mut saw_steps = false;
+
+    fn strip_bullet(line: &str) -> &str {
+        let t = line.trim();
+        let t = t.trim_start_matches(|c: char| c == '-' || c == '*' || c == '•').trim_start();
+        // strip a leading "N." or "N)" ordinal (closure pattern: array-pattern
+        // `find` support varies by toolchain version)
+        if let Some(pos) = t.find(|c: char| c == '.' || c == ')') {
+            if t[..pos].chars().all(|c| c.is_ascii_digit()) && pos > 0 {
+                return t[pos + 1..].trim();
+            }
+        }
+        t
+    }
+
+    for raw in s.lines() {
+        let line = raw.trim_end();
+        let lower = line.trim().to_lowercase();
+        if let Some(rest) = line.trim().strip_prefix_ci("goal:") {
+            saw_goal = true; section = Some("goal"); goal = rest.trim().to_string(); continue;
+        }
+        if lower.starts_with("steps:") {
+            saw_steps = true; section = Some("steps");
+            let rest = line.trim()[6..].trim();
+            if !rest.is_empty() { steps.push(rest.to_string()); }
+            continue;
+        }
+        if lower.starts_with("nodes:") {
+            section = Some("nodes");
+            let rest = line.trim()[6..].trim();
+            if !rest.is_empty() { nodes.extend(rest.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty())); }
+            continue;
+        }
+        if lower.starts_with("inputs/outputs:") || lower.starts_with("i/o:") || lower.starts_with("io:") {
+            section = Some("io");
+            let rest = line.trim().splitn(2, ':').nth(1).unwrap_or("").trim();
+            if !rest.is_empty() { io = rest.to_string(); }
+            continue;
+        }
+        if lower.starts_with("groups:") {
+            section = Some("groups");
+            let rest = line.trim()[7..].trim();
+            if !rest.is_empty() { groups.extend(rest.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty())); }
+            continue;
+        }
+        if line.trim().is_empty() { continue; }
+        match section {
+            Some("steps") => { let v = strip_bullet(line); if !v.is_empty() { steps.push(v.to_string()); } }
+            Some("nodes") => nodes.extend(line.split(',').map(|x| strip_bullet(x).to_string()).filter(|x| !x.is_empty())),
+            Some("groups") => { let v = strip_bullet(line); if !v.is_empty() { groups.push(v.to_string()); } }
+            Some("goal") => { if !goal.is_empty() { goal.push(' '); } goal.push_str(line.trim()); }
+            Some("io") => { if !io.is_empty() { io.push(' '); } io.push_str(line.trim()); }
+            _ => {}
+        }
+    }
+
+    if saw_goal && saw_steps && !steps.is_empty() {
+        Some(AuthoringSpec { goal, steps, selected_nodes: nodes, io, group_hints: groups })
+    } else {
+        None
+    }
+}
+
+/// The real plan contract: JSON first, then structured prose, else fail loud
+/// with the raw planner output surfaced.
+pub fn parse_plan(s: &str) -> Result<AuthoringSpec> {
+    let trimmed = s.trim();
+    if let Ok(spec) = parse_spec_tolerant(trimmed) {
+        return Ok(spec);
+    }
+    if let Some(spec) = parse_prose_plan(trimmed) {
+        return Ok(spec);
+    }
+    Err(anyhow::anyhow!(
+        "planner output is neither valid JSON nor a structured prose plan (need 'Goal:' and 'Steps:'). Raw output:\n{trimmed}"
+    ))
 }
 
 /// Intent layer: free-form chat -> prose spec. Lexical pre-selection shortlists
@@ -135,7 +240,7 @@ pub fn derive_spec(author: &dyn Author, index: &NodeIndex, chat: &str) -> Result
     );
     // The intent model's `propose` returns the JSON spec (not .weft).
     let json = author.propose(&prompt)?;
-    parse_spec_tolerant(json.trim())
+    parse_plan(json.trim())
 }
 
 #[cfg(test)]
@@ -234,6 +339,47 @@ mod tests {
             super::extract_json_object(s),
             Some("{\"k\":\"a}b\",\"n\":1}")
         );
+    }
+
+    #[test]
+    fn parse_plan_accepts_json() {
+        let spec = super::parse_plan(
+            r#"{"goal":"g","steps":["a","b"],"selected_nodes":["Debug"],"io":"x"}"#,
+        ).unwrap();
+        assert_eq!(spec.goal, "g");
+        assert_eq!(spec.steps.len(), 2);
+    }
+
+    #[test]
+    fn parse_plan_accepts_prose_headings() {
+        let plan = "Goal: triage GitHub issues\nSteps:\n- fetch issues\n- classify\n- review\nNodes: Cron, Http, LlmInference, HumanQuery\nInputs/Outputs: in: repo; out: posted comment";
+        let spec = super::parse_plan(plan).unwrap();
+        assert_eq!(spec.goal, "triage GitHub issues");
+        assert_eq!(spec.steps, vec!["fetch issues", "classify", "review"]);
+        assert!(spec.selected_nodes.contains(&"HumanQuery".to_string()));
+        assert!(spec.io.contains("repo"));
+    }
+
+    #[test]
+    fn parse_plan_preserves_human_text_verbatim() {
+        let plan = "Goal: keep the exact phrase Don't say \"AI-powered\"\nSteps:\n- one";
+        let spec = super::parse_plan(plan).unwrap();
+        assert!(spec.goal.contains("Don't say \"AI-powered\""));
+    }
+
+    #[test]
+    fn parse_plan_fails_loud_and_surfaces_raw() {
+        let err = super::parse_plan("just some chatter, no headings").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("neither valid JSON nor"), "got: {msg}");
+        assert!(msg.contains("just some chatter"), "must surface raw: {msg}");
+    }
+
+    #[test]
+    fn parse_plan_reads_group_hints_from_prose() {
+        let plan = "Goal: g\nSteps:\n- a\nGroups:\n- ingest\n- review";
+        let spec = super::parse_plan(plan).unwrap();
+        assert_eq!(spec.group_hints, vec!["ingest", "review"]);
     }
 
     #[test]
