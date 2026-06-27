@@ -27,12 +27,60 @@ fn array_elem_to_string(v: &serde_json::Value) -> String {
     value_to_string(v)
 }
 
+/// Extract the first complete top-level JSON object from `s` via brace-depth
+/// matching that respects string literals and escapes.
+///
+/// Real models often wrap the intent JSON in markdown fences (` ```json … ``` `)
+/// or append a prose explanation after the object (`{…}\n\nHere's the workflow…`).
+/// Whole-response fence stripping in the provider only handles the clean case;
+/// this recovers the object whenever it is embedded in surrounding text.
+/// Returns `None` if there is no balanced `{ … }` object.
+fn extract_json_object(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let start = s.find('{')?;
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    for i in start..bytes.len() {
+        let c = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[start..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Tolerant parser: accepts shape variance from real models.
 ///
-/// Only returns `Err` when the top-level text is not valid JSON at all
+/// Only returns `Err` when no balanced JSON object can be recovered at all
 /// (keeps fail-loud behaviour for truly-not-JSON output).
 fn parse_spec_tolerant(json: &str) -> Result<AuthoringSpec> {
+    // First try the text as-is; if that fails, try to recover an embedded
+    // object (handles leftover fences / trailing prose around the JSON).
     let v: serde_json::Value = serde_json::from_str(json)
+        .or_else(|first_err| {
+            extract_json_object(json)
+                .map(serde_json::from_str)
+                .unwrap_or(Err(first_err))
+        })
         .map_err(|e| anyhow::anyhow!("intent model did not return valid JSON: {e}"))?;
 
     // goal: string or compact-stringify; default ""
@@ -148,6 +196,43 @@ mod tests {
             spec.io.contains("in") || spec.io.contains("out"),
             "coerced io must contain original keys, got: {:?}",
             spec.io
+        );
+    }
+
+    #[test]
+    fn derive_spec_recovers_json_with_trailing_prose() {
+        // Real gemini failure: valid JSON object followed by an explanation.
+        let (_cat, idx) = make_index();
+        let model = MockAuthor::new(vec![
+            "{\"goal\":\"g\",\"steps\":[\"a\"],\"selected_nodes\":[\"Debug\"],\"io\":\"x\"}\n\nHere's the workflow you asked for."
+                .to_string(),
+        ]);
+        let spec = derive_spec(&model, &idx, "anything")
+            .expect("must recover object when prose trails the JSON");
+        assert_eq!(spec.goal, "g");
+    }
+
+    #[test]
+    fn derive_spec_recovers_fenced_json_with_trailing_prose() {
+        // Fence whose closing line is followed by prose, so whole-response
+        // fence stripping does not fire and a `` ```json `` prefix remains.
+        let (_cat, idx) = make_index();
+        let model = MockAuthor::new(vec![
+            "```json\n{\"goal\":\"g2\",\"steps\":[],\"selected_nodes\":[],\"io\":\"\"}\n```\nDone!"
+                .to_string(),
+        ]);
+        let spec = derive_spec(&model, &idx, "anything")
+            .expect("must recover object from fence-plus-prose");
+        assert_eq!(spec.goal, "g2");
+    }
+
+    #[test]
+    fn extract_json_object_respects_braces_in_strings() {
+        // A `}` inside a string value must not end the object early.
+        let s = "noise {\"k\":\"a}b\",\"n\":1} tail";
+        assert_eq!(
+            super::extract_json_object(s),
+            Some("{\"k\":\"a}b\",\"n\":1}")
         );
     }
 

@@ -70,6 +70,17 @@ fn parse_model_spec(spec: &str) -> (String, Option<Vec<String>>) {
     }
 }
 
+/// Default OpenRouter provider-routing for a bare model id (no `@provider`).
+/// gpt-oss-120b is pinned to Cerebras so the benchmark measures the intended
+/// fast provider rather than whatever OpenRouter would otherwise choose.
+fn default_provider_order(model: &str) -> Option<Vec<String>> {
+    if model.contains("gpt-oss-120b") {
+        Some(vec!["Cerebras".to_string()])
+    } else {
+        None
+    }
+}
+
 impl OpenRouterAuthor {
     /// Create from environment. Reads `OPENROUTER_API_KEY` first; falls back
     /// to `WORKDAY_OPENROUTER_API_KEY` if the first is unset or empty.
@@ -94,6 +105,10 @@ impl OpenRouterAuthor {
             .context("failed to build reqwest client")?;
 
         let (model, provider_order) = parse_model_spec(&model.into());
+        // Default gpt-oss-120b to Cerebras (the speed target) when the caller
+        // did not pin a provider explicitly via `model@provider`. OpenRouter
+        // otherwise routes it to an arbitrary, often slow, provider.
+        let provider_order = provider_order.or_else(|| default_provider_order(&model));
 
         Ok(Self {
             model,
@@ -305,7 +320,22 @@ pub fn strip_code_fences(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_content, parse_model_spec, strip_code_fences, ChatResponse};
+    use super::{
+        default_provider_order, extract_content, parse_model_spec, strip_code_fences, ChatResponse,
+    };
+
+    #[test]
+    fn default_provider_order_pins_gpt_oss_to_cerebras() {
+        assert_eq!(
+            default_provider_order("openai/gpt-oss-120b"),
+            Some(vec!["Cerebras".to_string()])
+        );
+    }
+
+    #[test]
+    fn default_provider_order_is_none_for_other_models() {
+        assert_eq!(default_provider_order("anthropic/claude-haiku-4.5"), None);
+    }
 
     // ── parse_model_spec tests ────────────────────────────────────────────
 

@@ -143,8 +143,10 @@
   </div>
   <div class="ctrl-group">
     <label>Model</label>
-    <input id="model" list="model-list" value="qwen/qwen3-coder" />
+    <input id="model" list="model-list" value="openai/gpt-oss-120b" />
     <datalist id="model-list">
+      <option value="openai/gpt-oss-120b">node generator (Cerebras) — default</option>
+      <option value="anthropic/claude-haiku-4.5"></option>
       <option value="qwen/qwen3-coder"></option>
       <option value="anthropic/claude-sonnet-4"></option>
       <option value="openai/gpt-4o-mini"></option>

@@ -74,9 +74,28 @@ mod live {
 
     // ── API types ─────────────────────────────────────────────────────────────
 
+    /// The promoted node generator: gpt-oss-120b. The bare id auto-routes to
+    /// Cerebras in `OpenRouterAuthor::from_env`, so this is the fast path. Used
+    /// whenever a request omits `model` or sends an empty string.
+    pub(crate) const DEFAULT_NODE_GENERATOR: &str = "openai/gpt-oss-120b";
+
+    fn default_model() -> String {
+        DEFAULT_NODE_GENERATOR.to_string()
+    }
+
+    /// Fall back to the default node generator when the caller sends an empty model.
+    fn resolve_model(model: String) -> String {
+        if model.trim().is_empty() {
+            default_model()
+        } else {
+            model
+        }
+    }
+
     #[derive(Deserialize)]
     struct RunRequest {
         chat: String,
+        #[serde(default = "default_model")]
         model: String,
         max_rounds: u32,
     }
@@ -84,6 +103,7 @@ mod live {
     #[derive(Deserialize)]
     struct RunStreamQuery {
         chat: String,
+        #[serde(default = "default_model")]
         model: String,
         max_rounds: u32,
     }
@@ -220,6 +240,7 @@ mod live {
     }
 
     fn run_harness_streaming(q: RunStreamQuery, tx: mpsc::Sender<Event>) {
+        let model = resolve_model(q.model.clone());
         // Use the persistent working project
         let project_root = match ensure_working_project() {
             Ok(p) => p,
@@ -265,7 +286,7 @@ mod live {
         let index = NodeIndex::build(&catalog);
 
         // 2. Build author
-        let inner = match OpenRouterAuthor::from_env(&q.model) {
+        let inner = match OpenRouterAuthor::from_env(&model) {
             Ok(a) => a,
             Err(e) => {
                 send_event(
@@ -437,7 +458,7 @@ mod live {
     // ── Blocking harness for POST /api/run (legacy) ──────────────────────────
 
     fn run_harness_blocking(req: RunRequest) -> Result<RunResponse, String> {
-        let model = req.model.clone();
+        let model = resolve_model(req.model.clone());
 
         let project_root = ensure_working_project()?;
 
@@ -446,7 +467,7 @@ mod live {
         let index = NodeIndex::build(&catalog);
 
         let inner =
-            OpenRouterAuthor::from_env(&req.model).map_err(|e| format!("OpenRouterAuthor: {e}"))?;
+            OpenRouterAuthor::from_env(&model).map_err(|e| format!("OpenRouterAuthor: {e}"))?;
         let author = BlockingAuthor::new(inner).map_err(|e| format!("BlockingAuthor: {e}"))?;
 
         let spec = derive_spec(&author, &index, &req.chat).map_err(|e| format!("derive_spec: {e}"))?;

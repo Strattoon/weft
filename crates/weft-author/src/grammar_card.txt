@@ -100,3 +100,41 @@
   orphan-outputs  [W]       node produces outputs but none are consumed
   no-required-skip [W]      node has no required inputs; will run on null
   config-null-literal [W]   config key: null is redundant; omit it
+
+### Node cards — exact ports (in: …) -> (out: …) and { config fields }
+# RULE: a port typed with a type-var (T) or whose value comes from another node
+#       is WIRED-ONLY — feed it via an edge, never a config literal or a port-type
+#       literal. Concrete scalar inputs (Number/String/Boolean) may go in { }.
+  Text    () -> (value: String)            { value: "..." }     # literal-string source; read t.value
+  Debug   (data: T) -> ()                  {}                    # THE output sink (auto _is_output); data is wired-only
+  Gate    (pass: Boolean, value: T) -> (value: T)  { pass: true }
+          # pass -> config { }. value is WIRED-ONLY (type-var T): it MUST come from an upstream edge.
+          # NEVER `Gate(... value: ...)` and NEVER `gate.value = "literal"`. Wire a Text node in.
+  Range   (from: Number, to: Number, step: Number) -> (values: List[Number])  { from: 1, to: 6 }
+  ExecPython(<in>: T) -> (<out>: T) { code: ```...``` }          # declare ports inline; inputs = py vars; return dict keyed by out port
+  HttpRequest(url: String, body?: JsonDict, headers?: Dict[String,String]) -> (status: Number, body: JsonDict | String, ok: Boolean)  { method: "GET" }
+  LlmInference(prompt: String) -> (response: String)  { model: "..."? }
+          # response is MustOverride — you MUST pin its type in the arrow form (e.g. -> (response: String)).
+          # config optional: runs on platform credits by default.
+  Cron    () -> (scheduledTime: String, actualTime: String)  { cron: "* * * * *" }   # trigger; wire an output downstream
+  HumanQuery(context?: String) -> (<from fields>)  { title, description, fields: [...] }
+          # HAS NO STATIC OUTPUTS. Output ports are generated from `fields` (a form-builder array).
+          # Each field is { "key": "<k>", "fieldType": "<type>" }. An approve_reject field emits
+          # TWO Boolean outputs: <k>_approved and <k>_rejected. Other types emit <k>.
+  HumanTrigger() -> (<from fields>)  { title, fields: [...] }   # trigger variant of HumanQuery
+
+### Canonical patterns for the hard cases
+# Gate-gated greeting (debug only when gate open):
+  msg = Text { value: "Hello, World!" }
+  gate = Gate { pass: true }
+  gate.value = msg.value
+  out = Debug
+  out.data = gate.value
+# Human-approval before debug (greeting shown only after approve):
+  msg = Text { value: "Hello, World!" }
+  ask = HumanQuery { title: "Approve?", fields: [{ "key": "review", "fieldType": "approve_reject" }] }
+  gate = Gate { }
+  gate.pass = ask.review_approved
+  gate.value = msg.value
+  out = Debug
+  out.data = gate.value
