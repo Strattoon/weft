@@ -1,0 +1,3 @@
+gate = Gate
+out = Debug
+out.data = gate.value

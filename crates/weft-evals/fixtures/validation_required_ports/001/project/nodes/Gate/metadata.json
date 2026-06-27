@@ -1,0 +1,19 @@
+{
+  "type": "Gate",
+  "label": "Gate",
+  "description": "Forwards value when pass is true; closes the output when pass is null or false.",
+  "category": "Flow",
+  "tags": ["flow", "gate", "conditional"],
+  "icon": "GitBranch",
+  "color": "#6366f1",
+  "inputs": [
+    { "name": "pass", "type": "Boolean", "required": true, "description": "true to forward value, null or false to cut flow" },
+    { "name": "value", "type": "T", "required": true, "description": "Value to forward when pass is true" }
+  ],
+  "outputs": [
+    { "name": "value", "type": "T", "required": false, "description": "The forwarded value" }
+  ],
+  "fields": [],
+  "entry": [],
+  "requires_infra": false
+}

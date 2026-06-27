@@ -1,0 +1,19 @@
+{
+  "type": "Debug",
+  "label": "Debug",
+  "description": "Display incoming data for debugging.",
+  "category": "Debug",
+  "tags": ["debug", "inspect"],
+  "icon": "Bug",
+  "color": "#b05574",
+  "inputs": [
+    { "name": "data", "type": "T", "required": true }
+  ],
+  "outputs": [],
+  "fields": [],
+  "entry": [],
+  "requires_infra": false,
+  "features": {
+    "isOutputDefault": true
+  }
+}

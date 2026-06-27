@@ -1,0 +1,5 @@
+src = Text { value: "hello" }
+gate = Gate { pass: true }
+out = Debug
+gate.value = src.value
+out.data = gate.value

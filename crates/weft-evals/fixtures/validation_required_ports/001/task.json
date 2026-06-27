@@ -1,0 +1,10 @@
+{
+  "schema_version": "weft_eval_task_v0",
+  "task_id": "validation_required_ports_001",
+  "family": "validation_required_ports",
+  "fixture_dir": "project",
+  "candidate_file": "main.weft",
+  "allowed_files": ["main.weft"],
+  "forbidden_files": ["weft.toml"],
+  "expected": { "diagnostics_empty": true }
+}

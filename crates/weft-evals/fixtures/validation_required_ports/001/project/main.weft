@@ -1,0 +1,4 @@
+# placeholder — overwritten by the candidate at eval time
+gate = Gate
+out = Debug
+out.data = gate.value
