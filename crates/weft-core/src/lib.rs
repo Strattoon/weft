@@ -14,6 +14,7 @@ pub mod pulse;
 pub mod running_policy;
 pub mod signal;
 pub mod signed_token;
+pub mod state_machine;
 pub mod storage;
 pub mod tag;
 pub mod wait;

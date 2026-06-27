@@ -2647,3 +2647,43 @@ fn include_with_internal_loop_lowers() {
     assert!(ids.contains(&("c.doit__in".into(), "LoopIn".into())), "loop in: {ids:?}");
     assert!(ids.contains(&("c.doit__out".into(), "LoopOut".into())), "loop out: {ids:?}");
 }
+
+#[test]
+fn test_state_machine_parses_into_def() {
+    use weft_core::state_machine::SmOwner;
+    // A `StateMachine` block per docs/state-machine-lowering.md §1: a header
+    // keyword + name + brace body of scalar config fields plus a `transitions:`
+    // list of `(From, Event) -> To owner=.. guard=.. artifact=..` rows.
+    let source = r#"
+StateMachine RunLifecycle {
+  initial: HumanRequestCaptured
+  terminal: [ Frozen, Void, Escalated ]
+  max_iters: 64
+  transitions: [
+    (HumanRequestCaptured, SpecDraftEmitted) -> SpecDrafted owner=model guard=request_nonempty artifact=human_spec_record
+    (SpecDrafted, SpecValidationPassed) -> SpecValidated owner=script guard=required_fields_present
+  ]
+}
+"#;
+    let (project, sms) = compile_with_state_machines(source, uuid::Uuid::new_v4(), None)
+        .expect("should compile a StateMachine block");
+    // The SM is NOT lowered/flattened into the graph (P6d does that): no nodes.
+    assert_eq!(project.nodes.len(), 0, "SM must not lower into nodes yet");
+    assert_eq!(sms.len(), 1, "exactly one StateMachineDef extracted");
+    let sm = &sms[0];
+    assert_eq!(sm.initial, "HumanRequestCaptured");
+    assert_eq!(sm.terminal, vec!["Frozen", "Void", "Escalated"]);
+    assert_eq!(sm.max_iters, 64u32);
+    assert_eq!(sm.transitions.len(), 2);
+    let t0 = &sm.transitions[0];
+    assert_eq!(t0.from, "HumanRequestCaptured");
+    assert_eq!(t0.event, "SpecDraftEmitted");
+    assert_eq!(t0.to, "SpecDrafted");
+    assert_eq!(t0.owner, SmOwner::Model);
+    assert_eq!(t0.guard.as_deref(), Some("request_nonempty"));
+    assert_eq!(t0.artifact.as_deref(), Some("human_spec_record"));
+    let t1 = &sm.transitions[1];
+    assert_eq!(t1.owner, SmOwner::Script);
+    assert_eq!(t1.guard.as_deref(), Some("required_fields_present"));
+    assert_eq!(t1.artifact, None);
+}

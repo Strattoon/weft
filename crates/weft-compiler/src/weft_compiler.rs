@@ -14,6 +14,7 @@ use weft_core::project::{
     ConfigFieldSpan, Edge, GroupBoundary, GroupBoundaryRole, NodeDefinition,
     PortDefinition, Position, ProjectDefinition, Span,
 };
+use weft_core::state_machine::{SmOwner, SmTransition, StateMachineDef};
 use weft_core::weft_type::WeftType;
 
 // ─── Compiler Error ──────────────────────────────────────────────────────────
@@ -200,6 +201,42 @@ pub fn compile(
     base_dir: Option<&std::path::Path>,
 ) -> Result<ProjectDefinition, Vec<CompileError>> {
     compile_with_mode(source, project_id, base_dir, IncludeMode::Full, None)
+}
+
+/// Compile Weft source AND extract its `StateMachine` blocks.
+///
+/// `StateMachine` blocks are surface syntax that P6d lowers onto the durable
+/// loop spine; until then they are NOT flattened into the graph (`compile` and
+/// `ProjectDefinition` see nothing of them — an SM-only file compiles to zero
+/// nodes). This entry surfaces the extracted `Vec<StateMachineDef>` alongside
+/// the `ProjectDefinition` so P6c (validation) and P6d (lowering) can consume
+/// it. Mirrors `compile`'s strict posture: any compile error aborts.
+///
+/// (SM extraction lives behind a dedicated entry rather than on `compile`'s
+/// return type so the dozens of existing `compile(...)` call sites are
+/// untouched, and so the pre-lowering SM AST never bleeds into `ProjectDefinition`
+/// in `weft-core/src/project.rs`.)
+pub fn compile_with_state_machines(
+    source: &str,
+    project_id: Uuid,
+    base_dir: Option<&std::path::Path>,
+) -> Result<(ProjectDefinition, Vec<StateMachineDef>), Vec<CompileError>> {
+    let project = compile_with_mode(source, project_id, base_dir, IncludeMode::Full, None)?;
+    let state_machines = extract_state_machines(source);
+    Ok((project, state_machines))
+}
+
+/// Lenient variant of [`compile_with_state_machines`]: always returns a project,
+/// the extracted state machines, and the collected diagnostics.
+pub fn compile_lenient_with_state_machines(
+    source: &str,
+    project_id: Uuid,
+    base_dir: Option<&std::path::Path>,
+) -> (ProjectDefinition, Vec<StateMachineDef>, Vec<CompileError>) {
+    let (project, errors) =
+        compile_lenient(source, project_id, base_dir, IncludeMode::Full, None);
+    let state_machines = extract_state_machines(source);
+    (project, state_machines, errors)
 }
 
 /// How `@include` is resolved. `Full` inlines the referenced group's whole
@@ -680,6 +717,179 @@ fn parse_weft(source: &str, source_id: &str) -> ParseState {
     // closing `}` is an unclosed block. Both are loud per-line diagnostics.
     detect_structural_errors(file.syntax(), &li, &mut state.errors);
     state
+}
+
+/// Extract every top-level `StateMachine` block from `source` into a
+/// `StateMachineDef`. This is pure AST extraction — NO validation (P6c) and NO
+/// lowering (P6d): a block is read into its literal surface shape and nothing
+/// more. Mirrors how a `Loop` body is read from its CST (`lower_loop` →
+/// `lower_grouplike_body`'s CONFIG_FIELD arm), but writes into the standalone SM
+/// AST instead of a `ParsedGroup`/`loop_config`, since the SM is not lowered.
+///
+/// Lenient: a missing/garbled field is simply absent in the result (e.g. an
+/// unparseable `max_iters` stays `0`); the parser never panics on a malformed
+/// block (it degrades to ERROR nodes the structural sweep reports).
+fn extract_state_machines(source: &str) -> Vec<StateMachineDef> {
+    use crate::cst::nodes::{StateMachineDecl, WeftFile};
+    use crate::cst::SyntaxKind as K;
+    let root = crate::cst::parse(source);
+    let Some(file) = WeftFile::cast(root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for child in file.syntax().children() {
+        if child.kind() != K::STATE_MACHINE_DECL {
+            continue;
+        }
+        let Some(decl) = StateMachineDecl::cast(child) else { continue };
+        out.push(extract_state_machine(&decl));
+    }
+    out
+}
+
+/// Read one `STATE_MACHINE_DECL` CST node into a `StateMachineDef`.
+fn extract_state_machine(decl: &crate::cst::nodes::StateMachineDecl) -> StateMachineDef {
+    use crate::cst::SyntaxKind as K;
+    let name = decl.local_id().unwrap_or_default();
+    let mut def = StateMachineDef {
+        name,
+        initial: String::new(),
+        terminal: Vec::new(),
+        max_iters: 0,
+        transitions: Vec::new(),
+    };
+    let Some(body) = decl.body() else { return def };
+    for field in body.syntax().children() {
+        if field.kind() != K::CONFIG_FIELD {
+            continue;
+        }
+        let Some((key, value)) = config_field_key_value(&field) else { continue };
+        match key.as_str() {
+            "initial" => def.initial = value.trim().to_string(),
+            "terminal" => def.terminal = parse_ident_list(&value),
+            "max_iters" => {
+                if let Ok(n) = value.trim().parse::<u32>() {
+                    def.max_iters = n;
+                }
+            }
+            "transitions" => def.transitions = parse_transition_rows(&value),
+            _ => {}
+        }
+    }
+    def
+}
+
+/// The `(key, value_text)` of a CONFIG_FIELD CST node: the key is its first IDENT
+/// token; the value is the concatenated text of every token after the `:`
+/// (trivia included so a `[...]` JSON_VALUE token survives intact). Returns None
+/// if there is no key.
+fn config_field_key_value(field: &crate::cst::SyntaxNode) -> Option<(String, String)> {
+    use crate::cst::SyntaxKind as K;
+    let mut key: Option<String> = None;
+    let mut seen_colon = false;
+    let mut value = String::new();
+    for elem in field.children_with_tokens() {
+        match elem {
+            rowan::NodeOrToken::Token(t) => {
+                if !seen_colon {
+                    if t.kind() == K::COLON {
+                        seen_colon = true;
+                    } else if t.kind() == K::IDENT && key.is_none() {
+                        key = Some(t.text().to_string());
+                    }
+                } else {
+                    value.push_str(t.text());
+                }
+            }
+            rowan::NodeOrToken::Node(n) => {
+                if seen_colon {
+                    value.push_str(&n.to_string());
+                }
+            }
+        }
+    }
+    key.map(|k| (k, value))
+}
+
+/// Parse a `[ A, B, C ]` ident-list value (the lexed `terminal:` JSON_VALUE) into
+/// the bare identifiers, dropping brackets/commas/whitespace.
+fn parse_ident_list(raw: &str) -> Vec<String> {
+    let inner = raw.trim().trim_start_matches('[').trim_end_matches(']');
+    inner
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Parse the `transitions: [ ... ]` block (the lexed JSON_VALUE token text) into
+/// transition rows. Each row is
+/// `(From, Event) -> To owner=.. guard=.. guard=.. artifact=..` per
+/// `docs/state-machine-lowering.md` §1.2. Lenient: a row that doesn't match the
+/// `(.. , ..) -> ..` shape is skipped (P6c reports semantic gaps; the parser
+/// never panics).
+fn parse_transition_rows(raw: &str) -> Vec<SmTransition> {
+    let inner = raw.trim().trim_start_matches('[').trim_end_matches(']');
+    let mut rows = Vec::new();
+    // Split on `(`: each row begins with the `(From, Event)` pair. Re-attach the
+    // `(` we split on so the pair is parseable.
+    for chunk in inner.split('(').skip(1) {
+        let chunk = chunk.trim();
+        if chunk.is_empty() {
+            continue;
+        }
+        if let Some(row) = parse_transition_row(chunk) {
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+/// Parse one transition row body (everything AFTER the opening `(`):
+/// `From, Event) -> To owner=.. guard=.. artifact=..`.
+fn parse_transition_row(body: &str) -> Option<SmTransition> {
+    // Split the `(From, Event)` pair off at the closing `)`.
+    let close = body.find(')')?;
+    let pair = &body[..close];
+    let rest = body[close + 1..].trim();
+    let mut pair_parts = pair.splitn(2, ',');
+    let from = pair_parts.next()?.trim().to_string();
+    let event = pair_parts.next()?.trim().to_string();
+    if from.is_empty() || event.is_empty() {
+        return None;
+    }
+    // `-> To owner=.. guard=.. artifact=..`
+    let rest = rest.strip_prefix("->")?.trim();
+    // The first whitespace-separated word is the target state; the remainder is
+    // `key=value` attributes.
+    let mut words = rest.split_whitespace();
+    let to = words.next()?.to_string();
+    let mut owner = SmOwner::Script;
+    let mut owner_set = false;
+    let mut guard: Option<String> = None;
+    let mut artifact: Option<String> = None;
+    for w in words {
+        let Some((k, v)) = w.split_once('=') else { continue };
+        match k {
+            "owner" => {
+                if let Some(o) = SmOwner::from_keyword(v) {
+                    owner = o;
+                    owner_set = true;
+                }
+            }
+            "guard" => guard = Some(v.to_string()),
+            "artifact" => artifact = Some(v.to_string()),
+            _ => {}
+        }
+    }
+    // `owner` is required per the grammar; a row missing/garbling it is malformed
+    // — drop it leniently (P6c will turn missing-owner into a hard diagnostic
+    // once it can see the AST; the parser must not invent an authority).
+    if !owner_set {
+        return None;
+    }
+    Some(SmTransition { from, event, to, owner, guard, artifact })
 }
 
 /// Walk the CST emitting a CompileError for each ERROR node (unparseable text)

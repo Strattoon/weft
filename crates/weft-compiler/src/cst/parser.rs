@@ -153,6 +153,7 @@ impl<'a> Parser<'a> {
             LineShape::Group => self.parse_group_decl(false),
             LineShape::AnonGroup => self.parse_group_decl(true),
             LineShape::Loop => self.parse_loop_decl(),
+            LineShape::StateMachine => self.parse_state_machine_decl(),
             LineShape::Include => self.parse_include_decl(),
             LineShape::Connection => self.parse_connection(),
             // Fields/directives are body-only; at top level they're malformed.
@@ -188,6 +189,19 @@ impl<'a> Parser<'a> {
             return match sig.get(1).map(|(_, k)| *k) {
                 Some(K::EQ) => LineShape::Node, // Group-as-a-name; lowering rejects it
                 None | Some(K::L_PAREN) | Some(K::ARROW) | Some(K::L_BRACE) => LineShape::AnonGroup,
+                _ => LineShape::Unknown,
+            };
+        }
+
+        // A leading `StateMachine` keyword heads a `StateMachine name { ... }`
+        // block (header keyword + name + brace body; NOT assignment-based, unlike
+        // Group/Loop). `StateMachine name {` / `StateMachine {` is the SM decl;
+        // anything else after the keyword (`StateMachine.x`, `StateMachine: v`,
+        // `StateMachine =`) is malformed -> one ERROR node, not a phantom decl.
+        if first == K::KW_STATE_MACHINE {
+            return match sig.get(1).map(|(_, k)| *k) {
+                None | Some(K::L_BRACE) => LineShape::StateMachine,
+                Some(K::IDENT) => LineShape::StateMachine,
                 _ => LineShape::Unknown,
             };
         }
@@ -317,6 +331,35 @@ impl<'a> Parser<'a> {
         self.maybe_parse_body(true);
         self.bump_trailing_same_line();
         self.builder.finish_node();
+    }
+
+    /// Parse a `StateMachine name { ... }` block. Unlike Group/Loop this is a
+    /// header KEYWORD + name (no `=`, no type signature): the `StateMachine`
+    /// keyword, then an optional name IDENT, then a `{ ... }` body of config
+    /// fields (`initial:`, `terminal:`, `max_iters:`, `transitions:`). The body
+    /// reuses the shared `maybe_parse_body` path, so its `transitions: [..]`
+    /// value lexes as one opaque JSON_VALUE token (the `[...]` rule) that the
+    /// AST-extraction step re-parses. Lenient: a malformed block degrades to
+    /// ERROR nodes / an unclosed-body diagnostic, never a panic.
+    fn parse_state_machine_decl(&mut self) {
+        self.builder.start_node(SyntaxKind::STATE_MACHINE_DECL.into());
+        self.bump_trivia(); // leading trivia for this decl
+        // HEADER: the `StateMachine` keyword + the name IDENT.
+        self.builder.start_node(SyntaxKind::HEADER.into());
+        self.bump_trivia_inline();
+        if self.cur() == Some(SyntaxKind::KW_STATE_MACHINE) {
+            self.bump(); // KW_STATE_MACHINE
+        }
+        self.bump_trivia_inline();
+        if self.cur() == Some(SyntaxKind::IDENT) {
+            self.bump(); // name
+        }
+        self.builder.finish_node(); // HEADER
+        // BODY: config fields only (no nested decls expected, but the shared
+        // body parser tolerates whatever is written and keeps every byte).
+        self.maybe_parse_body(false);
+        self.bump_trailing_same_line();
+        self.builder.finish_node(); // STATE_MACHINE_DECL
     }
 
     /// HEADER = `id = Type` + optional `(in_sig)` + optional `-> (out_sig)`, up
@@ -530,6 +573,7 @@ impl<'a> Parser<'a> {
             LineShape::Group => self.parse_group_decl(false),
             LineShape::AnonGroup => self.parse_group_decl(true),
             LineShape::Loop => self.parse_loop_decl(),
+            LineShape::StateMachine => self.parse_state_machine_decl(),
             LineShape::Include => self.parse_include_decl(),
             LineShape::Unknown => self.parse_error_line(),
         }
@@ -809,6 +853,9 @@ enum LineShape {
     AnonGroup,
     /// `id = Loop ...`.
     Loop,
+    /// `StateMachine name { ... }` (a leading `StateMachine` header keyword;
+    /// header keyword + name + brace body, not assignment-based).
+    StateMachine,
     /// `alias = @include("...")` (the RHS marker's directive is exactly `include`).
     Include,
     /// `target.port = ...` (LHS is exactly `IDENT . IDENT`).

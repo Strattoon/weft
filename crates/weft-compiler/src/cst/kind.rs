@@ -43,6 +43,7 @@ pub enum SyntaxKind {
     MARKER,     // @file(...) / @include(...) / @require_one_of(...), ONE opaque token
     KW_GROUP,   // the `Group` reserved type keyword
     KW_LOOP,    // the `Loop` reserved type keyword
+    KW_STATE_MACHINE, // the `StateMachine` reserved header keyword
 
     ERROR, // an unrecognized byte run (lenient parse; never panics)
 
@@ -52,6 +53,7 @@ pub enum SyntaxKind {
     NODE_DECL,    // id = Type(sig) -> (sig) { body }
     GROUP_DECL,   // label = Group(sig) -> (sig) { body }
     LOOP_DECL,    // label = Loop(sig) -> (sig) { config + body }
+    STATE_MACHINE_DECL, // StateMachine name { config + transitions }
     INCLUDE_DECL, // alias = @include("path")
 
     HEADER,        // `id = Type` + signatures, up to (not incl.) the body `{`
@@ -96,8 +98,10 @@ const ALL_KINDS: &[SyntaxKind] = {
     use SyntaxKind::*;
     &[
         WHITESPACE, COMMENT, L_PAREN, R_PAREN, L_BRACE, R_BRACE, ARROW, COLON, COMMA, DOT, EQ,
-        QUESTION, IDENT, STRING, NUMBER, HEREDOC, JSON_VALUE, MARKER, KW_GROUP, KW_LOOP, ERROR,
-        WEFT_FILE, NODE_DECL, GROUP_DECL, LOOP_DECL, INCLUDE_DECL, HEADER, PORT_SIG_IN, PORT_SIG_OUT,
+        QUESTION, IDENT, STRING, NUMBER, HEREDOC, JSON_VALUE, MARKER, KW_GROUP, KW_LOOP,
+        KW_STATE_MACHINE, ERROR,
+        WEFT_FILE, NODE_DECL, GROUP_DECL, LOOP_DECL, STATE_MACHINE_DECL, INCLUDE_DECL, HEADER,
+        PORT_SIG_IN, PORT_SIG_OUT,
         PORT_DECL, BODY, CONFIG_FIELD, CONNECTION, ENDPOINT, INLINE_EXPR, DIRECTIVE, LABEL_FIELD,
         GROUP_DESC,
     ]

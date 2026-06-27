@@ -50,6 +50,7 @@ typed_node!(WeftFile, WEFT_FILE);
 typed_node!(NodeDecl, NODE_DECL);
 typed_node!(GroupDecl, GROUP_DECL);
 typed_node!(LoopDecl, LOOP_DECL);
+typed_node!(StateMachineDecl, STATE_MACHINE_DECL);
 typed_node!(IncludeDecl, INCLUDE_DECL);
 typed_node!(Header, HEADER);
 typed_node!(Body, BODY);
@@ -144,6 +145,19 @@ impl NodeDecl {
     pub fn header(&self) -> Option<Header> {
         child(&self.0, SyntaxKind::HEADER).and_then(Header::cast)
     }
+    pub fn local_id(&self) -> Option<String> {
+        self.header().and_then(|h| first_ident(h.syntax()).map(|t| t.text().to_string()))
+    }
+    pub fn body(&self) -> Option<Body> {
+        child(&self.0, SyntaxKind::BODY).and_then(Body::cast)
+    }
+}
+
+impl StateMachineDecl {
+    pub fn header(&self) -> Option<Header> {
+        child(&self.0, SyntaxKind::HEADER).and_then(Header::cast)
+    }
+    /// The block name (the IDENT after the `StateMachine` keyword in the header).
     pub fn local_id(&self) -> Option<String> {
         self.header().and_then(|h| first_ident(h.syntax()).map(|t| t.text().to_string()))
     }

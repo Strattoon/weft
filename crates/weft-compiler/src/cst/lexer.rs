@@ -299,6 +299,9 @@ fn classify_word(word: &str) -> SyntaxKind {
     if word == "Loop" {
         return SyntaxKind::KW_LOOP;
     }
+    if word == "StateMachine" {
+        return SyntaxKind::KW_STATE_MACHINE;
+    }
     if word == "true" || word == "false" {
         return SyntaxKind::NUMBER;
     }
