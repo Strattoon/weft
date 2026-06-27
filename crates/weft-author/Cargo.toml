@@ -11,9 +11,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 
+# Optional — only pulled in when the `providers` feature is enabled.
+tokio = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 
 [features]
 # Live model providers are opt-in; the deterministic core + MockAuthor need none.
-providers = []
+providers = ["dep:tokio", "dep:reqwest", "dep:async-trait"]

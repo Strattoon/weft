@@ -14,3 +14,6 @@ pub mod author;
 pub mod intent;
 pub mod authoring;
 pub mod bench;
+
+#[cfg(feature = "providers")]
+pub mod providers;
