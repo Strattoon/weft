@@ -2683,7 +2683,7 @@ StateMachine RunLifecycle {
     assert_eq!(sm.terminal, vec!["Frozen", "Void", "Escalated"]);
     assert_eq!(sm.max_iters, 64u32);
     // The test still asserts the two key transition rows from P6b.
-    assert!(sm.transitions.len() >= 2, "at least 2 transitions");
+    assert_eq!(sm.transitions.len(), 5, "exact transition count (regression guard)");
     let t0 = &sm.transitions[0];
     assert_eq!(t0.from, "HumanRequestCaptured");
     assert_eq!(t0.event, "SpecDraftEmitted");
