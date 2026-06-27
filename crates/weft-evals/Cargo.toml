@@ -1,0 +1,17 @@
+[package]
+name = "weft-evals"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tempfile = { workspace = true }
+# In-process compiler: the runner calls validate() directly (no subprocess).
+weft-compiler = { workspace = true }
+weft-core = { workspace = true }
+weft-catalog = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
