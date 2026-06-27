@@ -1,0 +1,10 @@
+{
+  "schema_version": "weft_eval_task_v0",
+  "task_id": "tagged_flow_plane_separation_001",
+  "family": "tagged_flow_plane_separation",
+  "fixture_dir": "project",
+  "candidate_file": "main.weft",
+  "allowed_files": ["main.weft"],
+  "forbidden_files": ["weft.toml", "nodes"],
+  "expected": { "diagnostics_empty": true }
+}

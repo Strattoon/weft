@@ -1,0 +1,3 @@
+src = ControlSource
+sink = TaskSink { _is_output: true }
+sink.in = src.out

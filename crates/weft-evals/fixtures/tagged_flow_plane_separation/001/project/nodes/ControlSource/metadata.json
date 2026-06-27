@@ -1,0 +1,12 @@
+{
+  "type": "ControlSource",
+  "label": "ControlSource",
+  "description": "Test node: emits control-plane data.",
+  "category": "test",
+  "tags": [],
+  "inputs": [],
+  "outputs": [{ "name": "out", "type": "String", "produces_tags": ["control"] }],
+  "fields": [],
+  "entry": [],
+  "requires_infra": false
+}

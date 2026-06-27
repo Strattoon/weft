@@ -1,0 +1,12 @@
+{
+  "type": "TaskSink",
+  "label": "TaskSink",
+  "description": "Test node: task-plane input that forbids control-plane data.",
+  "category": "test",
+  "tags": [],
+  "inputs": [{ "name": "in", "type": "String", "forbids_tags": ["control"] }],
+  "outputs": [],
+  "fields": [],
+  "entry": [],
+  "requires_infra": false
+}
