@@ -219,5 +219,28 @@ mod tests {
         );
 
         assert_eq!(out.status, AuthorStatus::Error);
+        assert_eq!(out.rounds, 1);
+    }
+
+    #[test]
+    fn error_when_author_errs() {
+        // round 1: MockAuthor with empty queue returns Err on propose
+        let model = MockAuthor::new(vec![]);
+        let cat = make_cat();
+
+        let validate =
+            |_src: &str| -> Result<Vec<Diagnostic>, String> { Ok(vec![]) };
+
+        let out = author_until_green(
+            &model,
+            &cat,
+            &["SendEmail".to_string()],
+            "spec",
+            &validate,
+            5,
+        );
+
+        assert_eq!(out.status, AuthorStatus::Error);
+        assert_eq!(out.rounds, 1);
     }
 }
