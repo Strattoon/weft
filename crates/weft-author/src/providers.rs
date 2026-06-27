@@ -28,6 +28,18 @@ pub trait AsyncAuthor: Send + Sync {
     async fn repair(&self, context: &str, prev: &str, diagnostics: &str) -> Result<String>;
 }
 
+// ── Boxed forwarding impl ────────────────────────────────────────────────────
+
+#[async_trait]
+impl AsyncAuthor for Box<dyn AsyncAuthor + Send + Sync> {
+    async fn propose(&self, context: &str) -> Result<String> {
+        (**self).propose(context).await
+    }
+    async fn repair(&self, context: &str, prev: &str, diagnostics: &str) -> Result<String> {
+        (**self).repair(context, prev, diagnostics).await
+    }
+}
+
 // ── OpenRouterAuthor ─────────────────────────────────────────────────────────
 
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
