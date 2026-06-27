@@ -243,6 +243,57 @@ fn bail_on_errors(diagnostics: Vec<Diagnostic>) -> CompileResult<()> {
     }
 }
 
+/// File-aware, in-process validation entry point. Reads `source_file`, builds the
+/// project catalog from `project_root`, resolves the `@file`/`@include` base and
+/// source identity exactly as `weft validate --file` does, runs the strict
+/// parse→enrich→validate pipeline, and returns the typed diagnostics (already in
+/// deterministic order — see `validate::validate_with_mode`). This is the pure
+/// source→diagnostics oracle the eval/author harnesses call: no CLI, no JSON
+/// printing, no subprocess. An `Err` is an instrument failure (mapped to `void`
+/// by the harness), never a graph diagnostic.
+pub fn validate_file(
+    project_root: &std::path::Path,
+    source_file: &std::path::Path,
+) -> Result<Vec<Diagnostic>, String> {
+    let source = std::fs::read_to_string(source_file)
+        .map_err(|e| format!("read {}: {e}", source_file.display()))?;
+    let catalog = build::build_project_catalog(project_root)
+        .map_err(|e| format!("catalog: {e}"))?;
+    let project_id = project_id_for(project_root);
+    // Base for @file/@include = the source file's own directory (matches the CLI's
+    // base_dir_for(Some(file), _), which prefers the file's dir over the root).
+    let base = source_file.parent().filter(|p| !p.as_os_str().is_empty());
+    let source_name = crate::source_name::derive_id(Some(source_file));
+    let (_, diagnostics) = compile_strict(
+        &source,
+        project_id,
+        base,
+        &catalog,
+        validate::ValidationMode::Runtime,
+        Some(&source_name),
+    );
+    Ok(diagnostics)
+}
+
+/// The project id `compile_strict` wants. Validation diagnostics are independent
+/// of the id value (it is the dispatcher's identity, not a validation input), so
+/// a deterministic fallback is safe. Read it from `weft.toml` for fidelity with
+/// the CLI (mirrors `weft-cli`'s `resolve_project_id` which calls
+/// `Project::load` → `manifest.package.id`), falling back to the nil UUID.
+fn project_id_for(project_root: &std::path::Path) -> Uuid {
+    std::fs::read_to_string(project_root.join("weft.toml"))
+        .ok()
+        .and_then(|raw| raw.parse::<toml::Value>().ok())
+        .and_then(|v| {
+            v.get("package")
+                .and_then(|p| p.get("id"))
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        })
+        .and_then(|s| Uuid::parse_str(&s).ok())
+        .unwrap_or_else(Uuid::nil)
+}
+
 fn empty_project(project_id: Uuid) -> ProjectDefinition {
     ProjectDefinition {
         id: project_id,
@@ -251,5 +302,85 @@ fn empty_project(project_id: Uuid) -> ProjectDefinition {
         groups: Vec::new(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal valid `weft.toml`. Copied from the real e2e fixture shape
+    /// (`crates/weft-e2e/fixtures/plain/weft.toml`): `[package]` with `name`
+    /// and `id`. This is the canonical on-disk form `Project::load` parses.
+    fn minimal_valid_weft_toml() -> &'static str {
+        r#"[package]
+name = "test_project"
+id = "00000000-0000-0000-0000-000000000099"
+version = "0.1.0"
+"#
+    }
+
+    /// Metadata for a node with two required input ports (mirrors the real
+    /// `catalog/logic/gate/metadata.json` shape). Used to prove the
+    /// required-port-unmet diagnostic fires end-to-end.
+    fn gate_metadata_json() -> &'static str {
+        r##"{
+  "type": "Gate",
+  "label": "Gate",
+  "description": "Forwards value when pass is true.",
+  "category": "Flow",
+  "tags": ["flow"],
+  "icon": "GitBranch",
+  "color": "#6366f1",
+  "inputs": [
+    { "name": "pass", "type": "Boolean", "required": true },
+    { "name": "value", "type": "T", "required": true }
+  ],
+  "outputs": [
+    { "name": "value", "type": "T", "required": false }
+  ],
+  "fields": [],
+  "entry": [],
+  "requires_infra": false
+}"##
+    }
+
+    /// Write a minimal project to `root`: weft.toml + nodes/Gate/metadata.json.
+    fn write_minimal_project(root: &std::path::Path) {
+        std::fs::write(root.join("weft.toml"), minimal_valid_weft_toml()).unwrap();
+        let gate_dir = root.join("nodes").join("Gate");
+        std::fs::create_dir_all(&gate_dir).unwrap();
+        std::fs::write(gate_dir.join("metadata.json"), gate_metadata_json()).unwrap();
+    }
+
+    #[test]
+    fn validate_file_validates_a_real_project_in_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_minimal_project(root);
+
+        // Gate has two required inputs (pass, value) — leaving them unwired
+        // produces a required-port-unmet Error diagnostic. Also includes a
+        // Debug output node so the graph is topologically valid (has an output).
+        let src = root.join("main.weft");
+        std::fs::write(&src, "gate = Gate\nout = Debug\nout.data = gate.value\n").unwrap();
+
+        let diags = validate_file(root, &src).expect("validate_file should run, not error");
+        assert!(
+            diags.iter().any(|d| d.severity == Severity::Error),
+            "expected at least one error diagnostic (required-port-unmet), got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn validate_file_errs_on_missing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("weft.toml"), minimal_valid_weft_toml()).unwrap();
+        let res = validate_file(root, &root.join("nope.weft"));
+        assert!(
+            res.is_err(),
+            "missing source file is an instrument error (Err), not a diagnostic"
+        );
     }
 }
