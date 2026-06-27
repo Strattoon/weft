@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Weft Node Generator — benchmark dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #252836;
+    --border: #2e3348;
+    --text: #e2e8f0;
+    --text2: #8892a4;
+    --accent: #38d9a9;
+    --accent-dim: #1e7a5c;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --node-bg: #1e2233;
+    --node-border: #3a4060;
+    --port-dot: #4a90d9;
+    --edge-color: #4a90d9;
+    --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 20px; display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+  header h1 { font-size: 15px; font-weight: 600; color: var(--accent); letter-spacing: 0.02em; }
+
+  /* Controls bar */
+  .controls { background: var(--surface2); border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; flex-shrink: 0; }
+  .ctrl-group { display: flex; flex-direction: column; gap: 4px; }
+  .ctrl-group label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; }
+  textarea#chat { width: 380px; height: 60px; resize: vertical; background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 4px; font-family: inherit; font-size: 13px; }
+  textarea#chat:focus { outline: none; border-color: var(--accent); }
+  input#model, input#max_rounds { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 5px 8px; border-radius: 4px; font-size: 13px; }
+  input#model { width: 220px; }
+  input#max_rounds { width: 70px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  button#run-btn { padding: 8px 20px; background: var(--accent); color: #0a1a14; border: none; border-radius: 4px; font-weight: 700; font-size: 13px; cursor: pointer; align-self: flex-end; transition: opacity 0.15s; }
+  button#run-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .running-badge { font-size: 12px; color: var(--accent); align-self: center; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* Main layout */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Graph canvas */
+  .graph-pane { flex: 1; overflow: auto; background: var(--bg); position: relative; min-width: 0; }
+  #graph-svg { display: block; }
+  .empty-graph { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text2); font-size: 13px; }
+
+  /* Right sidebar */
+  .sidebar { width: 340px; flex-shrink: 0; border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); }
+  .sidebar-section { border-bottom: 1px solid var(--border); padding: 10px 12px; flex-shrink: 0; }
+  .sidebar-section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text2); margin-bottom: 8px; }
+  .verdict-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-weight: 700; font-size: 13px; }
+  .verdict-badge.green { background: var(--accent-dim); color: var(--accent); }
+  .verdict-badge.red { background: #7f1d1d; color: var(--red); }
+  .verdict-badge.error { background: #4a2500; color: var(--yellow); }
+  .verdict-meta { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+  /* Spec */
+  .spec-text { font-size: 12px; color: var(--text2); line-height: 1.5; white-space: pre-wrap; max-height: 120px; overflow-y: auto; }
+  .spec-text strong { color: var(--text); }
+
+  /* Rounds timeline */
+  .rounds-list { overflow-y: auto; max-height: 160px; }
+  .round-row { padding: 4px 6px; cursor: pointer; border-radius: 3px; font-size: 12px; color: var(--text2); }
+  .round-row:hover { background: var(--surface2); }
+  .round-row.active { background: var(--surface2); color: var(--text); }
+  .round-err-list { font-size: 11px; color: var(--red); margin-top: 2px; padding-left: 8px; }
+
+  /* Source pane */
+  .source-container { flex: 1; overflow: auto; }
+  pre#weft-source { font-family: var(--font-mono); font-size: 12px; padding: 10px 12px; white-space: pre-wrap; word-break: break-all; line-height: 1.5; color: #a8d8b9; background: #0d1610; min-height: 100%; }
+
+  /* History list */
+  .history-section { border-bottom: 1px solid var(--border); }
+  .history-list { overflow-y: auto; max-height: 100px; }
+  .history-item { padding: 5px 12px; font-size: 11px; cursor: pointer; color: var(--text2); display: flex; gap: 8px; align-items: center; }
+  .history-item:hover { background: var(--surface2); color: var(--text); }
+  .history-item .hi-verdict { font-weight: 700; }
+  .history-item .hi-verdict.green { color: var(--accent); }
+  .history-item .hi-verdict.red { color: var(--red); }
+  .history-item .hi-verdict.error { color: var(--yellow); }
+
+  /* SVG node graph */
+  .weft-node rect.node-box { fill: var(--node-bg); stroke: var(--node-border); stroke-width: 1.5; rx: 6; ry: 6; }
+  .weft-node.green-verdict rect.node-box { stroke: var(--accent); stroke-width: 2; }
+  .node-header { font-size: 11px; font-weight: 700; fill: var(--text); }
+  .node-type { font-size: 10px; fill: var(--text2); }
+  .port-label { font-size: 10px; fill: var(--text2); }
+  .port-dot { fill: var(--port-dot); }
+  .edge-path { fill: none; stroke: var(--edge-color); stroke-width: 1.5; opacity: 0.7; }
+  .no-result { color: var(--text2); padding: 20px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Weft Node Generator — benchmark dashboard</h1>
+</header>
+
+<div class="controls">
+  <div class="ctrl-group">
+    <label>Chat prompt</label>
+    <textarea id="chat" placeholder="e.g. show a greeting in debug output when a gate passes"></textarea>
+  </div>
+  <div class="ctrl-group">
+    <label>Model</label>
+    <input id="model" list="model-list" value="qwen/qwen3-coder" />
+    <datalist id="model-list">
+      <option value="qwen/qwen3-coder"></option>
+      <option value="anthropic/claude-sonnet-4"></option>
+      <option value="openai/gpt-4o-mini"></option>
+      <option value="deepseek/deepseek-chat"></option>
+    </datalist>
+  </div>
+  <div class="ctrl-group">
+    <label>Max rounds</label>
+    <input id="max_rounds" type="number" min="1" max="20" value="5" />
+  </div>
+  <button id="run-btn">Run</button>
+  <span class="running-badge" id="running-badge" style="display:none">running…</span>
+</div>
+
+<div class="main">
+  <div class="graph-pane" id="graph-pane">
+    <div class="empty-graph" id="empty-graph">Run a chat to see the node graph here.</div>
+  </div>
+
+  <div class="sidebar">
+    <!-- History -->
+    <div class="sidebar-section history-section">
+      <h3>Run history</h3>
+      <div class="history-list" id="history-list"></div>
+    </div>
+
+    <!-- Verdict -->
+    <div class="sidebar-section" id="verdict-section" style="display:none">
+      <h3>Verdict</h3>
+      <span class="verdict-badge" id="verdict-badge"></span>
+      <div class="verdict-meta" id="verdict-meta"></div>
+    </div>
+
+    <!-- Spec -->
+    <div class="sidebar-section" id="spec-section" style="display:none">
+      <h3>Spec readback</h3>
+      <div class="spec-text" id="spec-text"></div>
+    </div>
+
+    <!-- Rounds -->
+    <div class="sidebar-section" id="rounds-section" style="display:none">
+      <h3>Rounds</h3>
+      <div class="rounds-list" id="rounds-list"></div>
+    </div>
+
+    <!-- Source -->
+    <div class="source-container">
+      <pre id="weft-source">(final .weft source will appear here)</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const history = []; // newest-first array of result objects
+let activeResult = null;
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+const chatEl      = document.getElementById('chat');
+const modelEl     = document.getElementById('model');
+const maxRoundsEl = document.getElementById('max_rounds');
+const runBtn      = document.getElementById('run-btn');
+const runningBadge= document.getElementById('running-badge');
+const graphPane   = document.getElementById('graph-pane');
+const emptyGraph  = document.getElementById('empty-graph');
+const historyList = document.getElementById('history-list');
+const verdictSection = document.getElementById('verdict-section');
+const verdictBadge   = document.getElementById('verdict-badge');
+const verdictMeta    = document.getElementById('verdict-meta');
+const specSection    = document.getElementById('spec-section');
+const specText       = document.getElementById('spec-text');
+const roundsSection  = document.getElementById('rounds-section');
+const roundsList     = document.getElementById('rounds-list');
+const weftSource     = document.getElementById('weft-source');
+
+// ── Run ───────────────────────────────────────────────────────────────────────
+runBtn.addEventListener('click', async () => {
+  const chat      = chatEl.value.trim();
+  const model     = modelEl.value.trim();
+  const max_rounds = parseInt(maxRoundsEl.value, 10) || 5;
+  if (!chat) { alert('Enter a chat prompt.'); return; }
+
+  runBtn.disabled = true;
+  runningBadge.style.display = '';
+
+  try {
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat, model, max_rounds }),
+    });
+    const data = await res.json();
+    history.unshift(data);
+    renderResult(data);
+    renderHistory();
+  } catch (e) {
+    alert('Fetch error: ' + e.message);
+  } finally {
+    runBtn.disabled = false;
+    runningBadge.style.display = 'none';
+  }
+});
+
+// ── Render a result ──────────────────────────────────────────────────────────
+function renderResult(r) {
+  activeResult = r;
+
+  // Verdict
+  verdictSection.style.display = '';
+  const vcls = r.status === 'green' ? 'green' : r.status === 'exhausted_red' ? 'red' : 'error';
+  const vlabel = r.status === 'green' ? 'GREEN' : r.status === 'exhausted_red' ? 'EXHAUSTED RED' : 'ERROR';
+  verdictBadge.className = 'verdict-badge ' + vcls;
+  verdictBadge.textContent = vlabel;
+  verdictMeta.textContent = `${r.rounds} round(s) · ${r.model}`;
+
+  // Spec
+  if (r.spec_markdown) {
+    specSection.style.display = '';
+    specText.innerHTML = renderMarkdown(r.spec_markdown);
+  }
+
+  // Rounds
+  if (r.rounds_detail && r.rounds_detail.length > 0) {
+    roundsSection.style.display = '';
+    renderRounds(r.rounds_detail, r.final_weft);
+  } else {
+    roundsSection.style.display = 'none';
+  }
+
+  // Source
+  weftSource.textContent = r.final_weft || (r.error ? '(error: ' + r.error + ')' : '');
+
+  // Graph
+  emptyGraph.style.display = 'none';
+  // Remove old svg
+  const oldSvg = graphPane.querySelector('svg');
+  if (oldSvg) oldSvg.remove();
+
+  if (r.graph && r.graph.project) {
+    const svg = buildGraphSvg(r.graph.project, r.status === 'green');
+    graphPane.appendChild(svg);
+  } else {
+    emptyGraph.style.display = '';
+    emptyGraph.textContent = r.error
+      ? ('Error: ' + r.error)
+      : 'No graph data (weft parse returned null — check that weft is on PATH)';
+  }
+}
+
+// ── Markdown tiny render ─────────────────────────────────────────────────────
+function renderMarkdown(md) {
+  return md
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
+// ── Rounds timeline ──────────────────────────────────────────────────────────
+function renderRounds(rounds, finalWeft) {
+  roundsList.innerHTML = '';
+  rounds.forEach((rd, i) => {
+    const errCount = rd.errors ? rd.errors.length : 0;
+    const row = document.createElement('div');
+    row.className = 'round-row';
+    row.dataset.idx = i;
+
+    let html = `<div><strong>Round ${rd.round}</strong> — ${errCount} error(s)</div>`;
+    if (errCount > 0) {
+      html += `<div class="round-err-list">` +
+        rd.errors.map(e => `L${e.line}:${e.column} [${e.code}] ${escHtml(e.message)}`).join('<br>') +
+        `</div>`;
+    }
+    row.innerHTML = html;
+    row.addEventListener('click', () => {
+      document.querySelectorAll('.round-row').forEach(r => r.classList.remove('active'));
+      row.classList.add('active');
+      weftSource.textContent = rd.source || '';
+    });
+    roundsList.appendChild(row);
+  });
+
+  // "Final" entry
+  if (finalWeft) {
+    const finalRow = document.createElement('div');
+    finalRow.className = 'round-row';
+    finalRow.innerHTML = `<div><strong>Final</strong></div>`;
+    finalRow.addEventListener('click', () => {
+      document.querySelectorAll('.round-row').forEach(r => r.classList.remove('active'));
+      finalRow.classList.add('active');
+      weftSource.textContent = finalWeft;
+    });
+    roundsList.appendChild(finalRow);
+  }
+}
+
+// ── History list ──────────────────────────────────────────────────────────────
+function renderHistory() {
+  historyList.innerHTML = '';
+  history.forEach((r, i) => {
+    const vcls = r.status === 'green' ? 'green' : r.status === 'exhausted_red' ? 'red' : 'error';
+    const vlabel = r.status === 'green' ? 'GREEN' : r.status === 'exhausted_red' ? 'RED' : 'ERR';
+    const item = document.createElement('div');
+    item.className = 'history-item';
+    item.innerHTML = `<span class="hi-verdict ${vcls}">${vlabel}</span> <span>${escHtml(r.model)}</span> <span style="color:var(--text2)">${r.rounds}r</span>`;
+    item.addEventListener('click', () => renderResult(r));
+    historyList.appendChild(item);
+  });
+}
+
+// ── Graph renderer ────────────────────────────────────────────────────────────
+// Layout: depth-based columns. nodes.inputs = left ports, outputs = right ports.
+// Edges: source→sourceHandle (output port dot) → target→targetHandle (input port dot).
+
+const NODE_W = 180;
+const PORT_H = 20;
+const NODE_HEADER = 44; // px for header (id + type lines)
+const NODE_PAD_TOP = 8;
+const COL_GAP = 100;
+const ROW_GAP = 30;
+const MARGIN = 40;
+
+function buildGraphSvg(project, isGreen) {
+  const nodes = project.nodes || [];
+  const edges = project.edges || [];
+
+  if (nodes.length === 0) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('width','400'); svg.setAttribute('height','80');
+    const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t.setAttribute('x','20'); t.setAttribute('y','40');
+    t.setAttribute('fill','#8892a4'); t.setAttribute('font-size','13');
+    t.textContent = 'No nodes parsed (weft parse returned empty project)';
+    svg.appendChild(t);
+    return svg;
+  }
+
+  // Build depth map
+  const depthMap = computeDepths(nodes, edges);
+
+  // Group by depth column
+  const cols = {};
+  for (const n of nodes) {
+    const d = depthMap[n.id] || 0;
+    if (!cols[d]) cols[d] = [];
+    cols[d].push(n);
+  }
+
+  // Compute node heights
+  const nodeHeight = (n) => {
+    const rows = Math.max((n.inputs||[]).length, (n.outputs||[]).length, 1);
+    return NODE_HEADER + NODE_PAD_TOP + rows * PORT_H + 8;
+  };
+
+  // Assign positions
+  const pos = {}; // nodeId -> {x, y, w, h}
+  const sortedCols = Object.keys(cols).map(Number).sort((a,b)=>a-b);
+  let curX = MARGIN;
+
+  for (const col of sortedCols) {
+    const colNodes = cols[col];
+    let curY = MARGIN;
+    let maxW = 0;
+    for (const n of colNodes) {
+      const h = nodeHeight(n);
+      pos[n.id] = { x: curX, y: curY, w: NODE_W, h };
+      curY += h + ROW_GAP;
+      maxW = Math.max(maxW, NODE_W);
+    }
+    curX += maxW + COL_GAP;
+  }
+
+  // SVG size
+  const svgW = curX - COL_GAP + MARGIN;
+  let svgH = MARGIN;
+  for (const p of Object.values(pos)) svgH = Math.max(svgH, p.y + p.h + MARGIN);
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('id','graph-svg');
+  svg.setAttribute('width', svgW);
+  svg.setAttribute('height', svgH);
+
+  // Build port index: nodeId -> { input: {portName -> dotCenterY relative to node top}, ... }
+  const portDotY = {}; // nodeId -> { in: {portName->absY}, out: {portName->absY} }
+  for (const n of nodes) {
+    const p = pos[n.id];
+    if (!p) continue;
+    const inPorts = n.inputs || [];
+    const outPorts = n.outputs || [];
+    const inY = {};
+    const outY = {};
+    const baseY = p.y + NODE_HEADER + NODE_PAD_TOP;
+    const maxRows = Math.max(inPorts.length, outPorts.length, 1);
+    for (let i=0; i<inPorts.length; i++) {
+      inY[inPorts[i].name] = baseY + i * PORT_H + PORT_H/2;
+    }
+    for (let i=0; i<outPorts.length; i++) {
+      outY[outPorts[i].name] = baseY + i * PORT_H + PORT_H/2;
+    }
+    portDotY[n.id] = { in: inY, out: outY };
+  }
+
+  // Draw edges first (so nodes render on top)
+  for (const e of edges) {
+    const sp = pos[e.source];
+    const tp = pos[e.target];
+    if (!sp || !tp) continue;
+    const srcPorts = portDotY[e.source];
+    const tgtPorts = portDotY[e.target];
+
+    // source dot: right edge of source node at the output port row
+    let sy = sp.y + sp.h / 2;
+    if (srcPorts && srcPorts.out[e.sourceHandle] !== undefined) sy = srcPorts.out[e.sourceHandle];
+
+    // target dot: left edge of target node at the input port row
+    let ty = tp.y + tp.h / 2;
+    if (tgtPorts && tgtPorts.in[e.targetHandle] !== undefined) ty = tgtPorts.in[e.targetHandle];
+
+    const x1 = sp.x + sp.w;
+    const y1 = sy;
+    const x2 = tp.x;
+    const y2 = ty;
+    const cx = (x1 + x2) / 2;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`);
+    path.setAttribute('class','edge-path');
+    svg.appendChild(path);
+  }
+
+  // Draw nodes
+  for (const n of nodes) {
+    const p = pos[n.id];
+    if (!p) continue;
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('class', 'weft-node' + (isGreen ? ' green-verdict' : ''));
+    g.setAttribute('transform', `translate(${p.x},${p.y})`);
+
+    // Box
+    const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    rect.setAttribute('class','node-box');
+    rect.setAttribute('width', p.w);
+    rect.setAttribute('height', p.h);
+    rect.setAttribute('rx','6');
+    g.appendChild(rect);
+
+    // Header id
+    const idText = document.createElementNS('http://www.w3.org/2000/svg','text');
+    idText.setAttribute('class','node-header');
+    idText.setAttribute('x', p.w/2); idText.setAttribute('y', 18);
+    idText.setAttribute('text-anchor','middle');
+    idText.textContent = n.id;
+    g.appendChild(idText);
+
+    // nodeType
+    const typeText = document.createElementNS('http://www.w3.org/2000/svg','text');
+    typeText.setAttribute('class','node-type');
+    typeText.setAttribute('x', p.w/2); typeText.setAttribute('y', 32);
+    typeText.setAttribute('text-anchor','middle');
+    typeText.textContent = n.nodeType;
+    g.appendChild(typeText);
+
+    // Separator line
+    const sep = document.createElementNS('http://www.w3.org/2000/svg','line');
+    sep.setAttribute('x1','0'); sep.setAttribute('x2', p.w);
+    sep.setAttribute('y1', NODE_HEADER); sep.setAttribute('y2', NODE_HEADER);
+    sep.setAttribute('stroke','#2e3348'); sep.setAttribute('stroke-width','1');
+    g.appendChild(sep);
+
+    const basePortY = NODE_HEADER + NODE_PAD_TOP;
+
+    // Input ports (left)
+    (n.inputs||[]).forEach((port, i) => {
+      const cy = basePortY + i * PORT_H + PORT_H/2;
+      // dot on left edge
+      const dot = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      dot.setAttribute('class','port-dot');
+      dot.setAttribute('cx','0'); dot.setAttribute('cy', cy); dot.setAttribute('r','4');
+      g.appendChild(dot);
+      // label
+      const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
+      lbl.setAttribute('class','port-label');
+      lbl.setAttribute('x','8'); lbl.setAttribute('y', cy+4);
+      lbl.textContent = port.name + (port.required ? '*' : '');
+      g.appendChild(lbl);
+    });
+
+    // Output ports (right)
+    (n.outputs||[]).forEach((port, i) => {
+      const cy = basePortY + i * PORT_H + PORT_H/2;
+      const dot = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      dot.setAttribute('class','port-dot');
+      dot.setAttribute('cx', p.w); dot.setAttribute('cy', cy); dot.setAttribute('r','4');
+      g.appendChild(dot);
+      const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
+      lbl.setAttribute('class','port-label');
+      lbl.setAttribute('x', p.w - 8); lbl.setAttribute('y', cy+4);
+      lbl.setAttribute('text-anchor','end');
+      lbl.textContent = port.name;
+      g.appendChild(lbl);
+    });
+
+    svg.appendChild(g);
+  }
+
+  return svg;
+}
+
+// Compute depth (column index) for each node based on edges
+function computeDepths(nodes, edges) {
+  const depth = {};
+  for (const n of nodes) depth[n.id] = 0;
+
+  // Build adjacency: for each edge, target's depth = max(source_depth + 1, target_depth)
+  // Topological iteration (max 20 passes to handle arbitrary order)
+  for (let pass = 0; pass < 20; pass++) {
+    let changed = false;
+    for (const e of edges) {
+      const sd = depth[e.source] !== undefined ? depth[e.source] : 0;
+      const td = depth[e.target] !== undefined ? depth[e.target] : 0;
+      if (sd + 1 > td) {
+        depth[e.target] = sd + 1;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return depth;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
