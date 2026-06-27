@@ -1,0 +1,27 @@
+{
+  "type": "WorkdayPlan",
+  "label": "Workday Plan",
+  "description": "Model-authored planning node. Receives a validated spec and emits a plan draft. Transitions with owner=model; the emitted plan carries a proposal tag and must be disposed by a script before entering an authority state.",
+  "category": "workday",
+  "tags": ["workday", "planning", "model", "proposal"],
+  "icon": "FileText",
+  "color": "#8b5cf6",
+  "inputs": [
+    { "name": "spec", "type": "String", "required": false, "description": "Validated spec record from the scribe or human intake" },
+    { "name": "context", "type": "String", "required": false, "description": "Additional context bundle for planning" }
+  ],
+  "outputs": [
+    {
+      "name": "plan_draft",
+      "type": "String",
+      "required": false,
+      "description": "Model-authored plan draft. Tagged as a proposal — must be disposed by a script before reaching an authority input.",
+      "produces_tags": ["proposal"]
+    }
+  ],
+  "fields": [
+    { "key": "max_steps", "label": "Max planning steps", "field_type": { "kind": "number" } }
+  ],
+  "entry": [],
+  "requires_infra": false
+}

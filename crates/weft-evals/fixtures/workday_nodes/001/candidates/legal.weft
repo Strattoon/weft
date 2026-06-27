@@ -1,0 +1,18 @@
+# Legal Workday-domain tagged-flow wiring.
+#
+# Doctrine proof:
+#   exec.proposal  (produces_tags:["proposal"])
+#     → gateway.artifact_in  (no forbids_tags)        LEGAL — non-authority input
+#
+#   gateway.disposed_artifact  (no produces_tags)
+#     → oracle.validated_artifact  (forbids_tags:["proposal"])  LEGAL — source is untagged
+#
+# No produces_tags:["proposal"] output ever reaches a forbids_tags:["proposal"] input.
+# The proposal is disposed by GatewayDisposition before reaching any authority port.
+
+exec = Executor
+gateway = GatewayDisposition
+oracle = OracleCheck { _is_output: true }
+
+gateway.artifact_in = exec.proposal
+oracle.validated_artifact = gateway.disposed_artifact

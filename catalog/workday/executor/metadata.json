@@ -1,0 +1,29 @@
+{
+  "type": "Executor",
+  "label": "Executor",
+  "description": "Model-authored execution node. Receives a route plan and scribe contract, then emits an artifact proposal. The proposal must be extracted and validated by a script node before any authority state transition — the model only proposes, never disposes.",
+  "category": "workday",
+  "tags": ["workday", "executor", "model", "proposal", "artifact"],
+  "icon": "Play",
+  "color": "#f59e0b",
+  "inputs": [
+    { "name": "route_plan", "type": "String", "required": false, "description": "Route plan from RouteSelected authority state" },
+    { "name": "contract", "type": "String", "required": false, "description": "Validated scribe contract" },
+    { "name": "context", "type": "String", "required": false, "description": "Context bundle for execution" }
+  ],
+  "outputs": [
+    {
+      "name": "proposal",
+      "type": "String",
+      "required": false,
+      "description": "Model-authored artifact proposal. Tagged as a proposal — must be routed to a non-authority input (e.g. gateway_disposition.artifact_in or oracle_check.artifact_in) for extraction and scope validation before any authority input.",
+      "produces_tags": ["proposal"]
+    }
+  ],
+  "fields": [
+    { "key": "model_family", "label": "Model family override", "field_type": { "kind": "text" } },
+    { "key": "max_tokens", "label": "Max output tokens", "field_type": { "kind": "number" } }
+  ],
+  "entry": [],
+  "requires_infra": false
+}

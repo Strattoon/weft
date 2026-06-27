@@ -1,0 +1,4 @@
+# placeholder — overwritten by the candidate at eval time
+exec = Executor
+gateway = GatewayDisposition { _is_output: true }
+gateway.artifact_in = exec.proposal

@@ -1,0 +1,44 @@
+{
+  "type": "GatewayDisposition",
+  "label": "Gateway Disposition",
+  "description": "Gateway-authority disposition node. Two input tiers: artifact_in (non-authority, accepts model proposals for extraction/scope-check) and approved_artifact (authority, forbids proposals — only pre-disposed artifacts may enter). Emits disposed_artifact (untagged), which is safe to wire into any downstream authority input. This is the primary disposal step that converts a model proposal into an authority-safe artifact.",
+  "category": "workday",
+  "tags": ["workday", "gateway", "disposition", "authority", "scope"],
+  "icon": "GitMerge",
+  "color": "#6366f1",
+  "inputs": [
+    {
+      "name": "artifact_in",
+      "type": "String",
+      "required": false,
+      "description": "Non-authority input. Receives the model-proposed artifact for scope checking and extraction. No tag constraint — model proposals may enter here. The gateway validates scope, extracts the artifact, and emits disposed_artifact."
+    },
+    {
+      "name": "approved_artifact",
+      "type": "String",
+      "required": false,
+      "description": "Authority input. Receives a pre-approved, non-proposal artifact (e.g. from a prior disposal step). Forbids proposal-tagged values — model outputs must never wire here directly.",
+      "forbids_tags": ["proposal"]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "disposed_artifact",
+      "type": "String",
+      "required": false,
+      "description": "Script/gateway-disposed artifact. No proposal tag — safe to wire into authority inputs of oracle_check, human_freeze_gate, or any downstream authority state."
+    },
+    {
+      "name": "scope_passed",
+      "type": "Boolean",
+      "required": false,
+      "description": "True if scope validation passed (scope_subset_allowed guard)."
+    }
+  ],
+  "fields": [
+    { "key": "scope_policy", "label": "Scope policy id", "field_type": { "kind": "text" } },
+    { "key": "allow_repair", "label": "Allow repair loop", "field_type": { "kind": "checkbox" } }
+  ],
+  "entry": [],
+  "requires_infra": false
+}

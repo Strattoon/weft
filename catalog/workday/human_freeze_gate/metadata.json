@@ -1,0 +1,33 @@
+{
+  "type": "HumanFreezeGate",
+  "label": "Human Freeze Gate",
+  "description": "Human-owned durable suspend gate. Pauses execution pending human approval (approve/reject). Mirrors the HumanApprovalRequired lifecycle state. The decision output is not tagged as a proposal — humans are authority actors, not model proposers.",
+  "category": "workday",
+  "tags": ["workday", "human", "approval", "gate", "freeze"],
+  "icon": "UserCheck",
+  "color": "#10b981",
+  "inputs": [
+    { "name": "context", "type": "String", "required": false, "description": "Context shown to the reviewer (state, provenance, artifact summary)" },
+    { "name": "provenance", "type": "String", "required": false, "description": "Provenance record to present alongside the approval request" }
+  ],
+  "outputs": [
+    {
+      "name": "approved",
+      "type": "Boolean",
+      "required": false,
+      "description": "True if the human approved; false if rejected. Not tagged — human decisions are authority acts."
+    },
+    {
+      "name": "approval_record",
+      "type": "String",
+      "required": false,
+      "description": "Signed approval record for provenance journaling."
+    }
+  ],
+  "fields": [
+    { "key": "prompt", "label": "Approval prompt", "field_type": { "kind": "textarea" } },
+    { "key": "timeout_hours", "label": "Timeout (hours)", "field_type": { "kind": "number" } }
+  ],
+  "entry": [],
+  "requires_infra": false
+}

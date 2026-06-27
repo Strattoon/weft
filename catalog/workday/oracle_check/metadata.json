@@ -1,0 +1,44 @@
+{
+  "type": "OracleCheck",
+  "label": "Oracle Check",
+  "description": "Script-authority oracle validation node. Has two input tiers: artifact_in (non-authority, accepts model proposals for checking) and validated_artifact (authority, forbids proposals — only pre-disposed artifacts may enter). Emits oracle_output (untagged) representing the gate verdict. Models must route their proposal through artifact_in, never directly to validated_artifact.",
+  "category": "workday",
+  "tags": ["workday", "oracle", "script", "authority", "validation"],
+  "icon": "ShieldCheck",
+  "color": "#ef4444",
+  "inputs": [
+    {
+      "name": "artifact_in",
+      "type": "String",
+      "required": false,
+      "description": "Non-authority input. Receives the artifact (possibly model-proposed) for oracle checking. No tag constraint — proposals may enter here for evaluation."
+    },
+    {
+      "name": "validated_artifact",
+      "type": "String",
+      "required": false,
+      "description": "Authority input. Receives a pre-validated, non-proposal artifact that has already passed script disposition. Forbids proposal-tagged values — a model output must never wire here directly.",
+      "forbids_tags": ["proposal"]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "oracle_output",
+      "type": "String",
+      "required": false,
+      "description": "Oracle verdict record (gate_green or gate_red). Untagged — this is a script-authority output, not a model proposal."
+    },
+    {
+      "name": "passed",
+      "type": "Boolean",
+      "required": false,
+      "description": "True if the oracle gate passed (MechanicalGreen path)."
+    }
+  ],
+  "fields": [
+    { "key": "oracle_id", "label": "Oracle identifier", "field_type": { "kind": "text" } },
+    { "key": "strict_mode", "label": "Strict mode", "field_type": { "kind": "checkbox" } }
+  ],
+  "entry": [],
+  "requires_infra": false
+}

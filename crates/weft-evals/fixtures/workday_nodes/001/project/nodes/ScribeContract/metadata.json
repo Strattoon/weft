@@ -1,0 +1,27 @@
+{
+  "type": "ScribeContract",
+  "label": "Scribe Contract",
+  "description": "Model-authored scribe node. Receives a packed context bundle and emits a contract draft. Transitions with owner=model; the emitted contract carries a proposal tag and must pass script validation before entering an authority state.",
+  "category": "workday",
+  "tags": ["workday", "scribe", "model", "proposal", "contract"],
+  "icon": "PenLine",
+  "color": "#0ea5e9",
+  "inputs": [
+    { "name": "context", "type": "String", "required": false, "description": "Packed context bundle from ContextPacked state" },
+    { "name": "pass_chain", "type": "String", "required": false, "description": "Pass chain spec for scoping constraints" }
+  ],
+  "outputs": [
+    {
+      "name": "contract_draft",
+      "type": "String",
+      "required": false,
+      "description": "Model-authored contract draft. Tagged as a proposal — must be validated by a script (no_impl_leak) before route selection.",
+      "produces_tags": ["proposal"]
+    }
+  ],
+  "fields": [
+    { "key": "role_hint", "label": "Role hint for scribe", "field_type": { "kind": "text" } }
+  ],
+  "entry": [],
+  "requires_infra": false
+}
