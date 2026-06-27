@@ -1,0 +1,102 @@
+## WEFT GRAMMAR CARD — dense reference, no prose
+
+### Node declarations
+  name = NodeType                          # bare decl
+  name = NodeType { key: value }           # with config
+  name = NodeType(in: T) -> (out: T)       # arrow-form ports (inline port decl)
+  name = NodeType(a: Number) -> (b: String) { key: val }  # arrow + config
+
+### Connections (right-to-left: value flows FROM source INTO target)
+  target.in = source.out                   # basic connection
+  self.out = node.port                     # group/loop outputs via self
+  node.in = self.port                      # group/loop inputs via self
+
+### Config literals
+  str: "hello"   num: 42   flag: true   arr: [1,"x"]   obj: {"k":"v"}
+  _label: "..."  _tags: ["a"]  _is_output: true        # reserved keys
+
+### Multi-line string
+  code: ```\n  return {'out': 42}\n```
+
+### Groups
+  grp = Group(in: T) -> (out: T) {
+    inner = NodeType
+    inner.port = self.in
+    self.out = inner.result
+  }
+
+### Loops
+  lp = Loop(values: List[Number]) -> (results: List[Number | Null]) {
+    parallel: false          # true = parallel map; false = sequential (default)
+    over: ["values"]         # List[T] inputs to iterate; body sees T per step
+    carry: ["acc"]           # carry ports: persist across sequential iterations
+    max_iters: 100           # optional cap
+    # body: self.<iter-port> = one element; self.done = ... to vote stop
+  }
+
+### Triggers
+  ep = ApiEndpoint { path: "/hook" }
+  cr = Cron { cron: "0 * * * *" }
+  ht = HumanTrigger { fields: [...] }
+
+### File inclusion
+  @include("path.weft")     # include as a subgraph/group
+  @file("path")             # read file contents as config value
+  @file("path", String)     # with explicit type
+
+### Types
+  Primitives : String  Number  Boolean  Image  File  Video  Audio  Bus  Null
+  Containers : List[T]  List[List[T]]  Dict[K, V]  e.g. Dict[String, String]
+  Unions     : A | B   e.g. String | Number | Null
+  Type vars  : bare cap name T unifies across ports; must be pinned concrete
+  Optional   : port?  accepts null (required port without ? skips on null)
+  Null prop  : required input + null upstream → node skipped, cascades
+
+### Compatibility rules
+  - Source type must be assignable to target type (or subtype via union)
+  - T (typevar) resolves to the concrete type flowing in; must resolve
+  - Gather output of a Loop must be List[T | Null]  (not plain List[T])
+  - One edge per input port (1:1 rule)
+
+### Error codes (from weft-compiler/validate.rs)
+  type-mismatch             source type not assignable to target port type
+  unresolved-typevar        port type-var still unresolved after enrichment
+  must-override-unmet       MustOverride port — declare concrete type in source
+  config-type-mismatch      config literal type conflicts with port type
+  duplicate-node-id         same node id used twice in scope
+  unknown-source-node       edge references non-existent source node
+  unknown-target-node       edge references non-existent target node
+  unknown-source-port       edge handle not in node's outputs
+  unknown-target-port       edge handle not in node's inputs
+  duplicate-input-port      input port fed by more than one edge
+  scope-reachability        edge crosses scope boundary without group/loop
+  required-port-unmet       required input has no edge and no config value
+  require-one-of-unmet      @require_one_of group has no satisfied port
+  wired-only-port-config    configurable=false port has config value
+  undeclared-port-no-custom config key doesn't match any declared port/field
+  form-field-conflict       form field key duplicates a port of same direction
+  reserved-name             node id collides with a catalog type name
+  loop-boundary-unpaired    LoopIn without LoopOut or vice versa
+  loop-unknown-config-field unknown key in Loop config block
+  loop-parallel-not-boolean parallel: value is not a boolean literal
+  loop-config-missing-parallel flatten did not materialise parallel flag
+  loop-max-iters-not-integer max_iters must be non-negative integer
+  loop-trim-not-boolean     trim_on_mismatch must be boolean literal
+  parallel-with-carry       parallel: true + carry ports (mutually exclusive)
+  parallel-without-over     parallel: true requires non-empty over list
+  parallel-with-done        parallel: true + self.done write in body
+  loop-unbounded-no-termination sequential loop with no over/max_iters/done
+  over-and-carry-overlap    port appears in both over and carry lists
+  reserved-port-name        loop port named 'index' (input) or 'done' (output)
+  gather-output-must-be-nullable loop gather output not List[T | Null]
+  loop-over-unknown-port    over references unknown input port
+  over-not-a-list           over port not typed List[T]
+  loop-carry-unknown-port   carry references unknown port
+  carry-port-type-mismatch  carry port input/output types differ
+  no-output-node            project has no output node (Debug or _is_output)
+  unreachable-from-output   node not upstream of any output
+  rule-structural           declarative metadata rule fired (structural)
+  rule-runtime              declarative metadata rule fired (runtime)
+  orphan-outputs  [W]       node produces outputs but none are consumed
+  no-required-skip [W]      node has no required inputs; will run on null
+  config-null-literal [W]   config key: null is redundant; omit it

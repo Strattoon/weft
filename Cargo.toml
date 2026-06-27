@@ -18,6 +18,7 @@ members = [
     "crates/weft-storage",
     "crates/weft-e2e",
     "crates/weft-evals",
+    "crates/weft-author",
 ]
 
 [workspace.package]
@@ -85,3 +86,4 @@ weft-journal = { path = "crates/weft-journal" }
 weft-task-store = { path = "crates/weft-task-store" }
 weft-platform-traits = { path = "crates/weft-platform-traits" }
 weft-storage = { path = "crates/weft-storage" }
+weft-evals = { path = "crates/weft-evals" }
