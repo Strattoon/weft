@@ -51,6 +51,10 @@ pub fn validate_with_mode(
     check_output_reachability(project, &mut d);
     check_declarative_rules(project, catalog, mode, &mut d);
     check_reserved_names(project, catalog, &mut d);
+    d.sort_by(|a, b| {
+        (a.line, a.column, a.end_line, a.end_column, a.code.as_deref(), a.message.as_str())
+            .cmp(&(b.line, b.column, b.end_line, b.end_column, b.code.as_deref(), b.message.as_str()))
+    });
     d
 }
 

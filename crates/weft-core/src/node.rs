@@ -72,7 +72,7 @@ pub trait Node: Send + Sync {
 /// culprit (1-based line, 0-based char column); `end_line`/`end_column` bound
 /// its end (exclusive) so the editor underlines the exact range, not just a
 /// caret. End defaults to start when a producer only knows a point.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub line: usize,
     pub column: usize,

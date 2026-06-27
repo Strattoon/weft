@@ -3,7 +3,7 @@
 
 use weft_catalog::{stdlib_root, FsCatalog};
 use weft_compiler::enrich::enrich;
-use weft_compiler::validate::validate;
+use weft_compiler::validate::{validate, validate_with_mode, ValidationMode};
 use weft_compiler::weft_compiler::compile;
 use weft_compiler::{Diagnostic, Severity};
 
@@ -803,4 +803,48 @@ fetch = FetchToStorage -> (file: Number) { keep: false }
         msg.contains("incompatible with catalog type"),
         "error should explain the narrow is incompatible: {msg}"
     );
+}
+
+// ─── Determinism ─────────────────────────────────────────────────────────────
+
+#[test]
+fn diagnostics_are_in_deterministic_order() {
+    // Two unpaired loop boundaries (LoopIn without LoopOut) drive HashMap-
+    // iterated diagnostics in check_loop_config. Build them by hand so we
+    // have multiple diagnostics whose relative order is HashMap-dependent.
+    use weft_compiler::weft_compiler::{compile_lenient, IncludeMode};
+
+    let src = r#"
+loop_a = Loop(items: List[String]) -> (results: List[String | Null]) {
+    parallel: true
+    over: ["items"]
+    p = Text { value: "x" }
+    self.results = p.value
+}
+loop_b = Loop(items: List[String]) -> (results: List[String | Null]) {
+    parallel: true
+    over: ["items"]
+    q = Text { value: "y" }
+    self.results = q.value
+}
+"#;
+    // Use lenient compile so we can hand-mutate boundary nodes afterward.
+    let (mut project, _) = compile_lenient(src, uuid::Uuid::new_v4(), None, IncludeMode::Interface, None);
+    let _ = weft_compiler::enrich::enrich_with_policy(&mut project, &catalog(), weft_compiler::enrich::EnrichPolicy::Lenient);
+
+    // Remove all LoopOut nodes so every loop is "LoopIn with no matching LoopOut",
+    // which forces check_loop_config to emit one diagnostic per loop — in HashMap
+    // iteration order before the fix.
+    project.nodes.retain(|n| n.node_type != "LoopOut");
+
+    let diags = validate_with_mode(&project, &catalog(), ValidationMode::Runtime);
+    // Must have at least two diagnostics to exercise ordering.
+    assert!(diags.len() >= 2, "expected >=2 loop-boundary-unpaired diagnostics, got: {diags:?}");
+
+    let mut sorted = diags.clone();
+    sorted.sort_by(|a, b| {
+        (a.line, a.column, a.end_line, a.end_column, a.code.as_deref(), a.message.as_str())
+            .cmp(&(b.line, b.column, b.end_line, b.end_column, b.code.as_deref(), b.message.as_str()))
+    });
+    assert_eq!(diags, sorted, "validate_with_mode must return diagnostics in deterministic order");
 }
