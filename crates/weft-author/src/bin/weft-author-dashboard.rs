@@ -32,8 +32,9 @@ mod live {
     use tokio::sync::mpsc;
     use weft_author::authoring::{author_until_green, AuthorStatus};
     use weft_author::catalog_index::NodeIndex;
+    use weft_author::cli_provider::{resolve_backend, RuntimeMode};
     use weft_author::intent::derive_spec;
-    use weft_author::providers::{BlockingAuthor, OpenRouterAuthor};
+    use weft_author::providers::BlockingAuthor;
     use weft_compiler::build::build_project_catalog;
     use weft_compiler::validate_file;
     use weft_core::node::Severity;
@@ -90,11 +91,6 @@ mod live {
         } else {
             model
         }
-    }
-
-    /// Default generator backend spec (auto-routes gpt-oss to Cerebras).
-    fn default_generator_spec() -> String {
-        format!("openrouter:{DEFAULT_NODE_GENERATOR}")
     }
 
     /// Generator backend: explicit `generator` field wins; otherwise PRESERVE the
@@ -272,7 +268,6 @@ mod live {
     }
 
     fn run_harness_streaming(q: RunStreamQuery, tx: mpsc::Sender<Event>) {
-        let model = resolve_model(q.model.clone());
         // Use the persistent working project
         let project_root = match ensure_working_project() {
             Ok(p) => p,
@@ -317,8 +312,11 @@ mod live {
         };
         let index = NodeIndex::build(&catalog);
 
-        // 2. Build author
-        let inner = match OpenRouterAuthor::from_env(&model) {
+        // 2. Build planner + generator backends
+        let generator_spec = resolve_generator(q.generator.clone(), q.model.clone());
+        let planner_spec = resolve_planner(q.planner.clone(), &generator_spec);
+
+        let planner_inner = match resolve_backend(&planner_spec, RuntimeMode::LocalDev) {
             Ok(a) => a,
             Err(e) => {
                 send_event(
@@ -327,7 +325,7 @@ mod live {
                     AuthoredPayload {
                         status: "error".into(),
                         rounds: 0,
-                        final_weft: format!("OpenRouterAuthor: {e}"),
+                        final_weft: format!("planner backend: {e}"),
                         graph: None,
                     },
                 );
@@ -335,7 +333,7 @@ mod live {
                 return;
             }
         };
-        let author = match BlockingAuthor::new(inner) {
+        let planner = match BlockingAuthor::new(planner_inner) {
             Ok(a) => a,
             Err(e) => {
                 send_event(
@@ -344,7 +342,41 @@ mod live {
                     AuthoredPayload {
                         status: "error".into(),
                         rounds: 0,
-                        final_weft: format!("BlockingAuthor: {e}"),
+                        final_weft: format!("BlockingAuthor(planner): {e}"),
+                        graph: None,
+                    },
+                );
+                let _ = tx.blocking_send(Event::default().event("done").data("{}"));
+                return;
+            }
+        };
+        let generator_inner = match resolve_backend(&generator_spec, RuntimeMode::LocalDev) {
+            Ok(a) => a,
+            Err(e) => {
+                send_event(
+                    &tx,
+                    "authored",
+                    AuthoredPayload {
+                        status: "error".into(),
+                        rounds: 0,
+                        final_weft: format!("generator backend: {e}"),
+                        graph: None,
+                    },
+                );
+                let _ = tx.blocking_send(Event::default().event("done").data("{}"));
+                return;
+            }
+        };
+        let generator = match BlockingAuthor::new(generator_inner) {
+            Ok(a) => a,
+            Err(e) => {
+                send_event(
+                    &tx,
+                    "authored",
+                    AuthoredPayload {
+                        status: "error".into(),
+                        rounds: 0,
+                        final_weft: format!("BlockingAuthor(generator): {e}"),
                         graph: None,
                     },
                 );
@@ -353,8 +385,8 @@ mod live {
             }
         };
 
-        // 3. derive_spec — emit `spec` event
-        let spec = match derive_spec(&author, &index, &q.chat) {
+        // 3. derive_spec — emit `spec` event (non-blocking: no approval wait)
+        let spec = match derive_spec(&planner, &index, &q.chat) {
             Ok(s) => s,
             Err(e) => {
                 send_event(
@@ -424,7 +456,7 @@ mod live {
         };
 
         let outcome = author_until_green(
-            &author,
+            &generator,
             &catalog,
             &spec.selected_nodes,
             &spec_markdown,
@@ -498,11 +530,19 @@ mod live {
             build_project_catalog(&project_root).map_err(|e| format!("build_project_catalog: {e}"))?;
         let index = NodeIndex::build(&catalog);
 
-        let inner =
-            OpenRouterAuthor::from_env(&model).map_err(|e| format!("OpenRouterAuthor: {e}"))?;
-        let author = BlockingAuthor::new(inner).map_err(|e| format!("BlockingAuthor: {e}"))?;
+        let generator_spec = resolve_generator(req.generator.clone(), req.model.clone());
+        let planner_spec = resolve_planner(req.planner.clone(), &generator_spec);
 
-        let spec = derive_spec(&author, &index, &req.chat).map_err(|e| format!("derive_spec: {e}"))?;
+        let planner_inner = resolve_backend(&planner_spec, RuntimeMode::LocalDev)
+            .map_err(|e| format!("planner backend: {e}"))?;
+        let planner = BlockingAuthor::new(planner_inner)
+            .map_err(|e| format!("BlockingAuthor(planner): {e}"))?;
+        let generator_inner = resolve_backend(&generator_spec, RuntimeMode::LocalDev)
+            .map_err(|e| format!("generator backend: {e}"))?;
+        let generator = BlockingAuthor::new(generator_inner)
+            .map_err(|e| format!("BlockingAuthor(generator): {e}"))?;
+
+        let spec = derive_spec(&planner, &index, &req.chat).map_err(|e| format!("derive_spec: {e}"))?;
         let spec_markdown = spec.to_markdown();
 
         let main_weft = project_root.join("main.weft");
@@ -537,7 +577,7 @@ mod live {
         };
 
         let outcome = author_until_green(
-            &author,
+            &generator,
             &catalog,
             &spec.selected_nodes,
             &spec_markdown,
