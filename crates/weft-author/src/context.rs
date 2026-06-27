@@ -71,12 +71,16 @@ mod tests {
             port_type: WeftType::Primitive(weft_core::weft_type::WeftPrimitive::String),
             required: true,
             configurable: false,
+            produces_tags: vec![],
+            forbids_tags: vec![],
         }];
         m.outputs = vec![PortDef {
             name: "result".to_string(),
             port_type: WeftType::Primitive(weft_core::weft_type::WeftPrimitive::Boolean),
             required: false,
             configurable: false,
+            produces_tags: vec![],
+            forbids_tags: vec![],
         }];
         m
     }

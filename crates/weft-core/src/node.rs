@@ -482,6 +482,14 @@ pub struct PortDef {
     /// incoming edge). `wired_only` ports must come from upstream.
     #[serde(default)]
     pub configurable: bool,
+    /// Flow tags this OUTPUT port produces (metadata-only tagged-flow).
+    /// Empty for ordinary ports. See docs: tagged-flow.
+    #[serde(default, alias = "producesTags")]
+    pub produces_tags: Vec<String>,
+    /// Flow tags this INPUT port refuses to receive. An edge whose source
+    /// produces a forbidden tag is a `tagged-flow-violation` compile error.
+    #[serde(default, alias = "forbidsTags")]
+    pub forbids_tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -695,6 +703,35 @@ mod node_output_tests {
             .extend_from_object(&src, &[])
             .set("a", json!("from_set"));
         assert_eq!(out.outputs.get("a"), Some(&json!("from_set")));
+    }
+}
+
+#[cfg(test)]
+mod port_tags_tests {
+    use super::*;
+
+    #[test]
+    fn portdef_without_tags_defaults_empty() {
+        let json = r#"{ "name": "out", "type": "String" }"#;
+        let p: PortDef = serde_json::from_str(json).unwrap();
+        assert!(p.produces_tags.is_empty());
+        assert!(p.forbids_tags.is_empty());
+    }
+
+    #[test]
+    fn portdef_parses_camelcase_tags() {
+        let json = r#"{ "name": "out", "type": "String",
+            "producesTags": ["control"], "forbidsTags": ["untrusted"] }"#;
+        let p: PortDef = serde_json::from_str(json).unwrap();
+        assert_eq!(p.produces_tags, vec!["control".to_string()]);
+        assert_eq!(p.forbids_tags, vec!["untrusted".to_string()]);
+    }
+
+    #[test]
+    fn portdef_accepts_snake_alias() {
+        let json = r#"{ "name": "out", "type": "String", "produces_tags": ["control"] }"#;
+        let p: PortDef = serde_json::from_str(json).unwrap();
+        assert_eq!(p.produces_tags, vec!["control".to_string()]);
     }
 }
 
