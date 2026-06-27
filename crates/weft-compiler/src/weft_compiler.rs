@@ -755,6 +755,7 @@ fn extract_state_machine(decl: &crate::cst::nodes::StateMachineDecl) -> StateMac
         name,
         initial: String::new(),
         terminal: Vec::new(),
+        authority: Vec::new(),
         max_iters: 0,
         transitions: Vec::new(),
     };
@@ -767,6 +768,7 @@ fn extract_state_machine(decl: &crate::cst::nodes::StateMachineDecl) -> StateMac
         match key.as_str() {
             "initial" => def.initial = value.trim().to_string(),
             "terminal" => def.terminal = parse_ident_list(&value),
+            "authority" => def.authority = parse_ident_list(&value),
             "max_iters" => {
                 if let Ok(n) = value.trim().parse::<u32>() {
                     def.max_iters = n;

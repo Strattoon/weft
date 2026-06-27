@@ -2686,4 +2686,63 @@ StateMachine RunLifecycle {
     assert_eq!(t1.owner, SmOwner::Script);
     assert_eq!(t1.guard.as_deref(), Some("required_fields_present"));
     assert_eq!(t1.artifact, None);
+    // authority absent → empty vec (the field is optional).
+    assert_eq!(sm.authority, Vec::<String>::new(), "no authority line → empty vec");
+}
+
+#[test]
+fn test_state_machine_authority_parses() {
+    // A `StateMachine` block with an explicit `authority: [...]` line.
+    // The authority list must be extracted into `StateMachineDef::authority`
+    // exactly like `terminal: [...]` is extracted into `StateMachineDef::terminal`.
+    let source = r#"
+StateMachine RunLifecycle {
+  initial: HumanRequestCaptured
+  terminal: [ Frozen, Void ]
+  authority: [ MechanicalGreen, RouteSelected ]
+  max_iters: 64
+  transitions: [
+    (HumanRequestCaptured, SpecDraftEmitted) -> SpecDrafted owner=model guard=request_nonempty
+    (SpecDrafted, SpecValidationPassed) -> Frozen owner=script guard=required_fields_present
+  ]
+}
+"#;
+    let (_project, sms) = compile_with_state_machines(source, uuid::Uuid::new_v4(), None)
+        .expect("should compile a StateMachine block with authority");
+    assert_eq!(sms.len(), 1);
+    let sm = &sms[0];
+    assert_eq!(
+        sm.authority,
+        vec!["MechanicalGreen", "RouteSelected"],
+        "authority list must be extracted in source order"
+    );
+    assert_eq!(
+        sm.terminal,
+        vec!["Frozen", "Void"],
+        "terminal must still extract correctly alongside authority"
+    );
+}
+
+#[test]
+fn test_state_machine_no_authority_line_yields_empty_vec() {
+    // When the `authority:` field is absent the resulting `StateMachineDef`
+    // must carry an empty `authority` vec (not a parse error, not None).
+    let source = r#"
+StateMachine Simple {
+  initial: Open
+  terminal: [ Closed ]
+  max_iters: 10
+  transitions: [
+    (Open, Close) -> Closed owner=script guard=always
+  ]
+}
+"#;
+    let (_project, sms) = compile_with_state_machines(source, uuid::Uuid::new_v4(), None)
+        .expect("SM without authority line should compile");
+    assert_eq!(sms.len(), 1);
+    assert!(
+        sms[0].authority.is_empty(),
+        "absent authority: line → empty vec, got {:?}",
+        sms[0].authority
+    );
 }

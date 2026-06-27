@@ -23,6 +23,12 @@ pub struct StateMachineDef {
     /// Terminal states (the `terminal: [..]` list). Non-empty / subset-of-states
     /// is a P6c concern; the parser stores whatever was written.
     pub terminal: Vec<String>,
+    /// Authority states (the `authority: [..]` list). A model-owned transition
+    /// into any of these states is a P6c `sm-authority-inversion` error.
+    /// Optional in the grammar — absent → empty vec (P6c checks run cleanly on
+    /// an empty authority set: no inversions possible).
+    #[serde(default)]
+    pub authority: Vec<String>,
     /// The cycle-guard cap (`max_iters`), per `docs/state-machine-lowering.md` §2.
     pub max_iters: u32,
     /// The transition rows, in source order.
