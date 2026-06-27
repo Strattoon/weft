@@ -127,6 +127,7 @@ SmDecl {
   name: String,
   initial: StateId,                 // IDENT
   terminal: Vec<StateId>,           // non-empty; subset of state set
+  authority: Vec<StateId>,          // states that forbid model-owned transitions (self-declared per SM)
   max_iters: u32,                   // cycle-guard cap
   transitions: Vec<SmTransition>,
 }
@@ -339,15 +340,19 @@ test at `validate.rs:1346-1352`.
 
 ### 4.3 Which states are authority states
 
-From Workday (`transitions.rs:6-7` and the invariant the B2 tests assert): the
-authority states that must **never** be `Model`-owned are
-`MechanicalGreen`, `RouteSelected`, `ArtifactValidated`, `ProductionActionApplied`.
-The lowering tags the input ports of the subgraphs for these four states with
-`forbids_tags = ["proposal"]`. The Workday source already enforces this for its
-hand-rolled table — e.g. extraction INTO `ArtifactExtracted` is `Script`-owned and
-guarded by the test `executor_artifact_extraction_is_script_owned`
-(`transitions.rs:128-145`); the SM lowering reproduces that as a tagged-flow
-edge constraint rather than a Rust test.
+Authority states are **self-declared per state machine** via the `authority: [...]`
+line in the `SmDecl` block (§1.4). The state machine lowering tags the input ports
+of the subgraphs for each declared authority state with `forbids_tags = ["proposal"]`,
+and the `sm-authority-inversion` check flags any `owner=Model` transition whose
+`to` state is in that declared authority set as a compile error.
+
+Workday's canonical instance declares exactly these four as authority states:
+`MechanicalGreen`, `RouteSelected`, `ArtifactValidated`, `ProductionActionApplied`
+(see `transitions.rs:6-7` and the invariant the B2 tests assert). The Workday source
+already enforces this for its hand-rolled table — e.g. extraction INTO
+`ArtifactExtracted` is `Script`-owned and guarded by the test
+`executor_artifact_extraction_is_script_owned` (`transitions.rs:128-145`); the SM
+lowering reproduces that as a tagged-flow edge constraint rather than a Rust test.
 
 The canonical tag string is `"proposal"` (snake_case canonical per the
 schema doc-comment at `node.rs:486-492`). `owner=script|human|gateway` produce no
