@@ -31,11 +31,17 @@ pub enum ValidationMode {
 /// `catalog` provides per-node metadata (including declarative
 /// `validate` rules).
 pub fn validate(project: &ProjectDefinition, catalog: &dyn MetadataCatalog) -> Vec<Diagnostic> {
-    validate_with_mode(project, catalog, ValidationMode::Structural)
+    validate_with_mode(project, &[], catalog, ValidationMode::Structural)
 }
 
+/// Validate a whole `.weft` source: its project graph AND its `StateMachine`
+/// blocks. `sms` is the source's extracted [`StateMachineDef`]s (empty for a
+/// source with none, in which case the output is byte-identical to graph-only
+/// validation). An SM is a runnable spine in its own right, so a source that
+/// declares one is not required to also have a node-graph output node.
 pub fn validate_with_mode(
     project: &ProjectDefinition,
+    sms: &[StateMachineDef],
     catalog: &dyn MetadataCatalog,
     mode: ValidationMode,
 ) -> Vec<Diagnostic> {
@@ -48,10 +54,15 @@ pub fn validate_with_mode(
     check_port_coverage(project, catalog, &mut d);
     check_loop_config(project, &mut d);
     check_warnings(project, &mut d);
-    check_output_reachability(project, &mut d);
+    check_output_reachability(project, !sms.is_empty(), &mut d);
     check_declarative_rules(project, catalog, mode, &mut d);
     check_reserved_names(project, catalog, &mut d);
     check_tagged_flow(project, catalog, &mut d);
+    // Merge the StateMachine checks into the same diagnostic list so the single
+    // sort below orders SM and graph diagnostics together (deterministic).
+    for sm in sms {
+        check_state_machine(sm, &mut d);
+    }
     d.sort_by(|a, b| {
         (a.line, a.column, a.end_line, a.end_column, a.code.as_deref(), a.message.as_str())
             .cmp(&(b.line, b.column, b.end_line, b.end_column, b.code.as_deref(), b.message.as_str()))
@@ -1157,7 +1168,11 @@ fn check_tagged_flow(
 /// scopes, not as standalone targets. Trigger nodes are exempt:
 /// they'd otherwise warn even when they're correctly wired into
 /// fire-time subgraphs.
-fn check_output_reachability(project: &ProjectDefinition, d: &mut Vec<Diagnostic>) {
+fn check_output_reachability(
+    project: &ProjectDefinition,
+    has_state_machine: bool,
+    d: &mut Vec<Diagnostic>,
+) {
     // A component file (an anonymous top-level Group, used via @include) is
     // not a standalone runnable project: its outputs are the group's
     // interface ports, surfaced as the root group's __out Passthrough. Use
@@ -1183,6 +1198,13 @@ fn check_output_reachability(project: &ProjectDefinition, d: &mut Vec<Diagnostic
     };
 
     if outputs.is_empty() {
+        // A source whose runnable content is a StateMachine has no node-graph
+        // output, and that is correct: the SM's terminal states are the
+        // program's outputs (validated by the SM checks). Only flag a missing
+        // output when there is no SM spine to carry the run.
+        if has_state_machine {
+            return;
+        }
         // Project-level diagnostic (no single culprit): a default span renders
         // it as a file-level problem.
         push(

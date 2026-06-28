@@ -271,6 +271,6 @@ fn over_exhausted_cannot_preempt_termination() {
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
-    let diags = validate_with_mode(&project, &EmptyCat, ValidationMode::Structural);
+    let diags = validate_with_mode(&project, &[], &EmptyCat, ValidationMode::Structural);
     assert!(loop_config_diags(&diags).is_empty());
 }

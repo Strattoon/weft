@@ -837,7 +837,7 @@ loop_b = Loop(items: List[String]) -> (results: List[String | Null]) {
     // iteration order before the fix.
     project.nodes.retain(|n| n.node_type != "LoopOut");
 
-    let diags = validate_with_mode(&project, &catalog(), ValidationMode::Runtime);
+    let diags = validate_with_mode(&project, &[], &catalog(), ValidationMode::Runtime);
     // Must have at least two diagnostics to exercise ordering.
     assert!(diags.len() >= 2, "expected >=2 loop-boundary-unpaired diagnostics, got: {diags:?}");
 

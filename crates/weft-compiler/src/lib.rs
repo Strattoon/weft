@@ -99,9 +99,13 @@ pub fn parse_only(
     // Structural validate so the IDE gets inline feedback for
     // graph-shape problems (no-output-node, unreachable-from-output,
     // duplicate ids, etc.) directly from /parse. Runtime-only rules
-    // still only fire from the dedicated /validate endpoint.
+    // still only fire from the dedicated /validate endpoint. The source's
+    // StateMachine blocks are validated too, so an SM-only file gets live
+    // SM diagnostics (and is not flagged for a missing graph output).
+    let sms = weft_compiler::extract_state_machines(source);
     diagnostics.extend(validate::validate_with_mode(
         &project,
+        &sms,
         catalog,
         validate::ValidationMode::Structural,
     ));
@@ -135,7 +139,12 @@ pub fn compile_strict(
 ) -> (ProjectDefinition, Vec<Diagnostic>) {
     let (project, mut diagnostics) =
         compile_and_enrich(source, project_id, base_dir, catalog, source_name);
-    diagnostics.extend(validate::validate_with_mode(&project, catalog, mode));
+    // Validate the source's StateMachine blocks alongside the graph. SM blocks
+    // are not lowered into `project` here (lowering is the build/runtime step,
+    // P6d); validation runs the four pure SM checks on the extracted defs and
+    // merges their diagnostics, so a malformed SM is never silently accepted.
+    let sms = weft_compiler::extract_state_machines(source);
+    diagnostics.extend(validate::validate_with_mode(&project, &sms, catalog, mode));
     (project, diagnostics)
 }
 

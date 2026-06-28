@@ -257,33 +257,6 @@ pub fn compile_with_state_machines(
     Ok((project, state_machines))
 }
 
-/// Lenient variant of [`compile_with_state_machines`]: always returns a project,
-/// the extracted state machines, and the collected diagnostics (including SM
-/// validation diagnostics).
-pub fn compile_lenient_with_state_machines(
-    source: &str,
-    project_id: Uuid,
-    base_dir: Option<&std::path::Path>,
-) -> (ProjectDefinition, Vec<StateMachineDef>, Vec<CompileError>) {
-    let (project, mut errors) =
-        compile_lenient(source, project_id, base_dir, IncludeMode::Full, None);
-    let state_machines = extract_state_machines(source);
-    // P6c: fold SM diagnostics into the lenient error list.
-    let mut sm_diags = Vec::new();
-    crate::validate::validate_state_machines(&state_machines, &mut sm_diags);
-    for d in sm_diags {
-        let span = Span {
-            start_line: d.line,
-            start_column: d.column,
-            end_line: d.end_line,
-            end_column: d.end_column,
-        };
-        let prefix = d.code.map(|c| format!("[{c}] ")).unwrap_or_default();
-        errors.push(CompileError::at(span, format!("{prefix}{}", d.message)));
-    }
-    (project, state_machines, errors)
-}
-
 /// How `@include` is resolved. `Full` inlines the referenced group's whole
 /// body (build: one binary). `Interface` emits a single opaque node carrying
 /// only the group's ports (interactive parse: the editor renders an opaque
@@ -774,7 +747,7 @@ fn parse_weft(source: &str, source_id: &str) -> ParseState {
 /// Lenient: a missing/garbled field is simply absent in the result (e.g. an
 /// unparseable `max_iters` stays `0`); the parser never panics on a malformed
 /// block (it degrades to ERROR nodes the structural sweep reports).
-fn extract_state_machines(source: &str) -> Vec<StateMachineDef> {
+pub fn extract_state_machines(source: &str) -> Vec<StateMachineDef> {
     use crate::cst::nodes::{StateMachineDecl, WeftFile};
     use crate::cst::SyntaxKind as K;
     let root = crate::cst::parse(source);
